@@ -1,24 +1,17 @@
-import 'package:file_picker/file_picker.dart';
 // Flutter's newer material_ui package is not available on older supported SDKs.
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
-import '../application/audit_plan_review_service.dart';
+import '../application/local_audit_service.dart';
 import '../data/import_service.dart';
 import '../data/local_audit_database.dart';
 import '../domain/audit_engine.dart';
-import '../google/google_sheets_gateway.dart';
+import 'local_audit_file.dart';
 
 class CycleEditor extends StatefulWidget {
-  const CycleEditor({
-    super.key,
-    required this.db,
-    required this.session,
-    this.cycle,
-  });
+  const CycleEditor({super.key, required this.db, this.cycle});
   final LocalAuditDatabase db;
-  final GoogleSession session;
   final CycleRecord? cycle;
   @override
   State<CycleEditor> createState() => _CycleEditorState();
@@ -40,7 +33,6 @@ class _CycleEditorState extends State<CycleEditor> {
   int step = 0;
   bool busy = false;
   String? error;
-  GoogleSheetsGateway get gateway => GoogleSheetsGateway(widget.session);
 
   @override
   void initState() {
@@ -59,27 +51,8 @@ class _CycleEditorState extends State<CycleEditor> {
   }
 
   _Source? _restore(Map<String, Object?> metadata, Object? data) {
-    if (data is! List) return null;
-    final rows =
-        data
-            .whereType<List>()
-            .map((r) => r.map((c) => c?.toString() ?? '').toList())
-            .toList();
-    final rawUnsafe = metadata['nonTextCells'];
-    // A missing type record is not evidence that the original cells were text.
-    if (rawUnsafe is! List) return null;
-    final unsafe = <(int, int)>{};
-    for (final value in rawUnsafe) {
-      if (value is! List ||
-          value.length != 2 ||
-          value[0] is! int ||
-          value[1] is! int) {
-        return null;
-      }
-      unsafe.add((value[0] as int, value[1] as int));
-    }
-    final title = metadata['label'] as String? ?? 'مصدر محفوظ';
-    return _Source(title, ImportedSheet(title, rows, unsafe), metadata);
+    final sheet = restoreAuditSheet(metadata, data);
+    return sheet == null ? null : _Source(sheet.name, sheet, metadata);
   }
 
   @override
@@ -101,199 +74,21 @@ class _CycleEditorState extends State<CycleEditor> {
     error = null;
   });
 
-  Future<T?> _select<T>(String title, List<T> items, String Function(T) label) {
-    var query = '';
-    return showDialog<T>(
-      context: context,
-      builder:
-          (context) => StatefulBuilder(
-            builder: (context, setDialogState) {
-              final visible =
-                  items
-                      .where(
-                        (item) => label(
-                          item,
-                        ).toLowerCase().contains(query.toLowerCase()),
-                      )
-                      .toList();
-              return AlertDialog(
-                title: Text(title),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextField(
-                        decoration: const InputDecoration(
-                          labelText: 'بحث بالاسم',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                        onChanged: (text) => setDialogState(() => query = text),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        height: 300,
-                        child:
-                            visible.isEmpty
-                                ? const Center(
-                                  child: Text('لا توجد عناصر متاحة.'),
-                                )
-                                : ListView.builder(
-                                  itemCount: visible.length,
-                                  itemBuilder:
-                                      (context, index) => ListTile(
-                                        title: Text(label(visible[index])),
-                                        onTap:
-                                            () => Navigator.pop(
-                                              context,
-                                              visible[index],
-                                            ),
-                                      ),
-                                ),
-                      ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('إلغاء'),
-                  ),
-                ],
-              );
-            },
-          ),
-    );
-  }
-
   Future<void> _file(bool isManagement) async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['xlsx', 'csv'],
-        withData: true,
-      );
-      if (result == null || !mounted) return;
-      final file = result.files.single;
-      if (file.bytes == null) {
-        throw const FormatException('تعذرت قراءة الملف المحدد.');
-      }
-      ImportedSheet sheet;
-      if (file.extension?.toLowerCase() == 'csv') {
-        final encoding = await _select<String>(
-          'اختر ترميز الملف',
-          ['auto', 'utf-8', 'utf-16le', 'utf-16be', 'windows-1256'],
-          (x) => switch (x) {
-            'auto' => 'تلقائي (UTF-8 أو علامة UTF-16)',
-            'windows-1256' => 'Windows-1256 عربي',
-            _ => x.toUpperCase(),
-          },
-        );
-        if (encoding == null) return;
-        sheet = ImportService.decodeCsv(
-          file.bytes!,
-          encoding: encoding == 'auto' ? null : encoding,
-        );
-      } else {
-        final book = ImportService.readXlsx(file.bytes!);
-        if (!mounted) return;
-        final selected = await _select<String>(
-          'اختر ورقة العمل',
-          book.sheetNames,
-          (x) => x,
-        );
-        if (selected == null) return;
-        sheet = book.selectSheet(selected);
-      }
+      final sheet = await pickAuditFile(context);
+      if (!mounted || sheet == null) return;
       _setSource(
         isManagement,
-        _Source('${file.name} · ${sheet.name}', sheet, {
+        _Source(sheet.name, sheet, {
           'kind': 'file',
-          'label': '${file.name} · ${sheet.name}',
-          'fileName': file.name,
-          'sheetTitle': sheet.name,
+          'label': sheet.name,
           'nonTextCells': sheet.nonTextCells.map((p) => [p.$1, p.$2]).toList(),
         }),
       );
     } catch (e) {
       if (mounted) setState(() => error = 'تعذر استيراد الملف: ${_error(e)}');
     }
-  }
-
-  Future<void> _google(bool isManagement) async {
-    try {
-      final account =
-          widget.session.accountId ?? await widget.session.connect();
-      if (account == null || !mounted) return;
-      setState(() {
-        busy = true;
-        error = null;
-      });
-      final spreadsheets = await gateway.listSpreadsheets(account);
-      if (!mounted) return;
-      setState(() => busy = false);
-      final spreadsheet = await _select<SpreadsheetRef>(
-        'اختر جدول البيانات',
-        spreadsheets,
-        (x) => x.name,
-      );
-      if (spreadsheet == null || !mounted) return;
-      setState(() => busy = true);
-      final sheets = await gateway.listSheets(account, spreadsheet.id);
-      if (!mounted) return;
-      setState(() => busy = false);
-      final tab = await _select<SheetRef>(
-        'اختر ورقة العمل',
-        sheets,
-        (x) => x.title,
-      );
-      if (tab == null || !mounted) return;
-      setState(() => busy = true);
-      final data = await gateway.readSheet(account, spreadsheet.id, tab.id);
-      if (!mounted) return;
-      final rows = <List<String>>[];
-      final unsafe = <(int, int)>{};
-      for (final row in data.rows) {
-        while (rows.length <= row.index) {
-          rows.add([]);
-        }
-        final cells = <String>[];
-        for (final cell in row.cells) {
-          final value = cell.entered;
-          if (value.isNotEmpty && !value.containsKey('stringValue')) {
-            unsafe.add((row.index, cells.length));
-          }
-          cells.add(value['stringValue']?.toString() ?? cell.formatted);
-        }
-        rows[row.index] = cells;
-      }
-      final sheet = ImportedSheet(tab.title, rows, unsafe);
-      final label = '${spreadsheet.name} · ${tab.title}';
-      _setSource(
-        isManagement,
-        _Source(label, sheet, {
-          'kind': 'google',
-          'label': label,
-          'accountId': account,
-          'spreadsheetId': spreadsheet.id,
-          'spreadsheetName': spreadsheet.name,
-          'sheetId': tab.id,
-          'sheetTitle': tab.title,
-          'nonTextCells': unsafe.map((p) => [p.$1, p.$2]).toList(),
-          'googleReviewProof': AuditPlanReviewService.captureProof(data),
-        }),
-      );
-    } catch (e) {
-      if (mounted) setState(() => error = 'تعذر قراءة Google: ${_error(e)}');
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  String _error(Object e) {
-    if (e is FormatException) return e.message;
-    if (e is GoogleFailure) return e.message;
-    return 'تحقق من الملف أو الاتصال وحاول مجددًا.';
   }
 
   void _validate(
@@ -341,6 +136,7 @@ class _CycleEditorState extends State<CycleEditor> {
           id: existing?.id ?? const Uuid().v4(),
           name: name.text.trim(),
           createdAt: existing?.createdAt ?? DateTime.now(),
+          updatedAt: existing?.updatedAt,
           managementSource: management!.metadata,
           agentSource: agent!.metadata,
           columnMappings: {
@@ -361,6 +157,7 @@ class _CycleEditorState extends State<CycleEditor> {
             'agent': agent!.sheet.rows,
           },
         ),
+        localOnly: true,
       );
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -387,11 +184,25 @@ class _CycleEditorState extends State<CycleEditor> {
               icon: const Icon(Icons.upload_file),
               label: const Text('ملف من الجهاز'),
             ),
-            OutlinedButton.icon(
-              onPressed: busy ? null : () => _google(isManagement),
-              icon: const Icon(Icons.cloud_outlined),
-              label: const Text('Google Sheets'),
-            ),
+            if (!isManagement)
+              TextButton(
+                onPressed:
+                    busy
+                        ? null
+                        : () => _setSource(
+                          false,
+                          _Source(
+                            'بدون بيانات وكيل',
+                            const ImportedSheet('بدون بيانات وكيل', [], {}),
+                            {
+                              'kind': 'file',
+                              'label': 'بدون بيانات وكيل',
+                              'nonTextCells': [],
+                            },
+                          ),
+                        ),
+                child: const Text('بدون بيانات وكيل'),
+              ),
           ],
         ),
         const SizedBox(height: 24),
@@ -522,9 +333,7 @@ class _CycleEditorState extends State<CycleEditor> {
           const SizedBox(height: 16),
           if (step == 0) ...[_source(true), _source(false)],
           if (step == 1 && management != null && agent != null) ...[
-            const Text(
-              'تأكد من العناوين وأعمدة أرقام المستخدمين. يجب حفظ المعرفات كنص في ملفات Excel وGoogle.',
-            ),
+            const Text('تحقق من صف العناوين وعمود رقم المستخدم في كل مصدر.'),
             const SizedBox(height: 16),
             _mapping(true),
             const SizedBox(height: 12),
@@ -623,3 +432,9 @@ class _CycleEditorState extends State<CycleEditor> {
     ),
   );
 }
+
+String _error(Object exception) => switch (exception) {
+  FormatException(:final message) => message.toString(),
+  StateError(:final message) => message,
+  _ => 'تعذر حفظ بيانات الدورة.',
+};
