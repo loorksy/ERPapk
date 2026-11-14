@@ -2,11 +2,15 @@
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 
+import '../application/local_audit_service.dart';
 import '../data/local_audit_database.dart';
+import '../data/local_audit_export.dart';
 import '../domain/audit_engine.dart';
-import '../google/google_sheets_gateway.dart';
-import 'audit_flow.dart';
+import '../domain/local_audit_result.dart';
+import 'local_audit_page.dart';
+import 'local_audit_results_page.dart';
 import 'cycle_editor.dart';
 
 class AuditHome extends StatefulWidget {
@@ -17,11 +21,11 @@ class AuditHome extends StatefulWidget {
 
 class _AuditHomeState extends State<AuditHome> {
   LocalAuditDatabase? db;
-  final session = GoogleSession();
   List<CycleRecord> cycles = [];
   String? currentId;
   int page = 0;
   String? loadError;
+  bool exporting = false;
 
   @override
   void initState() {
@@ -38,12 +42,6 @@ class _AuditHomeState extends State<AuditHome> {
       }
       db = database;
       await _refresh();
-      try {
-        await session.restore();
-      } catch (_) {
-        /* A manual connection can be retried. */
-      }
-      if (mounted) setState(() {});
     } catch (_) {
       if (mounted) {
         setState(() => loadError = 'تعذر فتح البيانات المحفوظة على الجهاز.');
@@ -64,24 +62,15 @@ class _AuditHomeState extends State<AuditHome> {
   }
 
   Future<void> _edit([CycleRecord? cycle]) async {
-    if (cycle?.auditClosed == true) {
+    final saved = cycle == null ? null : await db!.getCycle(cycle.id);
+    if (cycle != null && saved == null) return;
+    if (saved?.auditClosed == true) {
       _message('أعد فتح الدورة قبل تعديلها.');
       return;
     }
-    if (cycle != null) {
-      final operations = await db!.listOperations(cycle.id);
-      if (operations.any(
-        (operation) => !isOperationComplete(operation.status),
-      )) {
-        _message('لا يمكن تعديل الدورة أثناء وجود عمليات غير مكتملة.');
-        return;
-      }
-    }
     if (!mounted) return;
     final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => CycleEditor(db: db!, session: session, cycle: cycle),
-      ),
+      MaterialPageRoute(builder: (_) => CycleEditor(db: db!, cycle: saved)),
     );
     if (changed == true) await _refresh();
   }
@@ -94,61 +83,54 @@ class _AuditHomeState extends State<AuditHome> {
     }
   }
 
-  Future<void> _connection() async {
+  Future<void> _export(CycleRecord cycle) async {
+    if (exporting) return;
+    setState(() => exporting = true);
     try {
-      if (session.accountId != null) {
-        final disconnect = await showDialog<bool>(
-          context: context,
-          builder:
-              (context) => AlertDialog(
-                title: const Text('حساب Google'),
-                content: Text(
-                  'الحساب المتصل: ${session.email}\nيمكنك قطع الاتصال ثم ربط حساب آخر.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('إلغاء'),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('قطع الاتصال'),
-                  ),
-                ],
-              ),
-        );
-        if (disconnect == true) await session.disconnect();
-      } else {
-        await session.connect();
-      }
-      if (mounted) setState(() {});
-    } catch (_) {
-      _message(
-        'تعذر ربط حساب Google. تحقق من الاتصال وإعداد التطبيق ثم حاول مجددًا.',
+      final history = await db!.listLocalAudit(cycle.id, history: true);
+      final bytes = LocalAuditExport.encode(cycle, history);
+      final saved = await FilePicker.platform.saveFile(
+        dialogTitle: 'حفظ نتائج التدقيق',
+        fileName:
+            'audit-${cycle.createdAt.toLocal().toIso8601String().split('T').first}.xlsx',
+        type: FileType.custom,
+        allowedExtensions: ['xlsx'],
+        bytes: bytes,
       );
+      if (saved != null) _message('تم حفظ ملف Excel.');
+    } catch (_) {
+      _message('تعذر تصدير نتائج الدورة.');
+    } finally {
+      if (mounted) setState(() => exporting = false);
     }
   }
 
   Future<void> _openPreview(CycleRecord cycle) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => AuditFlowPage(db: db!, session: session, cycle: cycle),
+        builder: (_) => LocalAuditPage(db: db!, cycleId: cycle.id),
       ),
     );
     if (mounted) await _refresh();
   }
+
+  Future<void> _openResults(CycleRecord cycle) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => LocalAuditResultsPage(db: db!, cycle: cycle),
+    ),
+  );
 
   Future<void> _changeClosed(CycleRecord cycle) async {
     try {
       if (cycle.auditClosed) {
         await db!.reopenCycle(cycle.id);
       } else {
-        await db!.closeCycle(cycle.id);
+        await db!.closeCycle(cycle.id, localOnly: true);
       }
       await _refresh();
       _message(cycle.auditClosed ? 'أُعيد فتح الدورة.' : 'أُغلقت الدورة.');
     } catch (_) {
-      _message('تعذر تغيير حالة الدورة. تأكد من عدم وجود عمليات غير مكتملة.');
+      _message('تعذر تغيير حالة الدورة.');
     }
   }
 
@@ -158,9 +140,7 @@ class _AuditHomeState extends State<AuditHome> {
       builder:
           (context) => AlertDialog(
             title: const Text('حذف الدورة من الجهاز؟'),
-            content: const Text(
-              'ستُحذف بيانات الدورة وسجلها من هذا الجهاز فقط. لن تُحذف ملفات Google.',
-            ),
+            content: const Text('ستُحذف بيانات الدورة وسجلها من هذا الجهاز.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
@@ -174,8 +154,12 @@ class _AuditHomeState extends State<AuditHome> {
           ),
     );
     if (confirmed != true) return;
-    await db!.deleteCycle(cycle.id);
-    await _refresh();
+    try {
+      await db!.deleteCycle(cycle.id, localOnly: true);
+      await _refresh();
+    } catch (_) {
+      _message('تعذر حذف الدورة.');
+    }
   }
 
   @override
@@ -201,11 +185,11 @@ class _AuditHomeState extends State<AuditHome> {
     final views = <Widget>[
       _CyclesPage(
         cycles: cycles,
-        db: database,
         onCreate: () => _edit(),
         onEdit: _edit,
         onDelete: _delete,
         onToggle: _changeClosed,
+        onExport: _export,
         onSelect:
             (c) => setState(() {
               currentId = c.id;
@@ -215,28 +199,15 @@ class _AuditHomeState extends State<AuditHome> {
       _AuditPage(
         cycles: cycles,
         selected: selected,
-        session: session,
-        onConnect: _connection,
+        onExport: exporting ? null : _export,
         onSelect: (id) => setState(() => currentId = id),
         onPreview: _openPreview,
+        onResults: _openResults,
       ),
-      _SearchPage(cycles: cycles, db: database, session: session),
+      _SearchPage(cycles: cycles, db: database, onChanged: _refresh),
     ];
     return Scaffold(
-      appBar: AppBar(
-        title: Text(['الدورات', 'التدقيق', 'البحث'][page]),
-        actions: [
-          IconButton(
-            tooltip: 'حساب Google',
-            onPressed: _connection,
-            icon: Icon(
-              session.accountId == null
-                  ? Icons.account_circle_outlined
-                  : Icons.account_circle,
-            ),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(['الدورات', 'التدقيق', 'البحث'][page])),
       body: SafeArea(child: views[page]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: page,
@@ -262,17 +233,20 @@ class _AuditHomeState extends State<AuditHome> {
 class _CyclesPage extends StatelessWidget {
   const _CyclesPage({
     required this.cycles,
-    required this.db,
     required this.onCreate,
     required this.onEdit,
     required this.onDelete,
     required this.onToggle,
     required this.onSelect,
+    required this.onExport,
   });
   final List<CycleRecord> cycles;
-  final LocalAuditDatabase db;
   final VoidCallback onCreate;
-  final ValueChanged<CycleRecord> onEdit, onDelete, onToggle, onSelect;
+  final ValueChanged<CycleRecord> onEdit,
+      onDelete,
+      onToggle,
+      onSelect,
+      onExport;
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(20),
@@ -293,23 +267,9 @@ class _CyclesPage extends StatelessWidget {
           child: ListTile(
             onTap: () => onSelect(cycle),
             title: Text(cycle.name),
-            subtitle: FutureBuilder<List<OperationRecord>>(
-              future: db.listOperations(cycle.id),
-              builder: (context, snapshot) {
-                final pending =
-                    snapshot.data
-                        ?.where((o) => !isOperationComplete(o.status))
-                        .length;
-                final date =
-                    cycle.createdAt
-                        .toLocal()
-                        .toIso8601String()
-                        .split('T')
-                        .first;
-                return Text(
-                  '$date · ${cycle.auditClosed ? 'مغلقة' : 'مفتوحة'}${pending == null ? '' : ' · عمليات غير مكتملة: $pending'}',
-                );
-              },
+            subtitle: Text(
+              '${cycle.createdAt.toLocal().toIso8601String().split('T').first}'
+              ' · ${cycle.auditClosed ? 'مغلقة' : 'مفتوحة'}',
             ),
             trailing: PopupMenuButton<String>(
               onSelected: (choice) {
@@ -318,6 +278,8 @@ class _CyclesPage extends StatelessWidget {
                     onEdit(cycle);
                   case 'toggle':
                     onToggle(cycle);
+                  case 'export':
+                    onExport(cycle);
                   case 'delete':
                     onDelete(cycle);
                 }
@@ -335,6 +297,10 @@ class _CyclesPage extends StatelessWidget {
                       ),
                     ),
                     const PopupMenuItem(
+                      value: 'export',
+                      child: Text('تصدير Excel'),
+                    ),
+                    const PopupMenuItem(
                       value: 'delete',
                       child: Text('حذف من الجهاز'),
                     ),
@@ -350,17 +316,16 @@ class _AuditPage extends StatelessWidget {
   const _AuditPage({
     required this.cycles,
     required this.selected,
-    required this.session,
-    required this.onConnect,
+    required this.onExport,
     required this.onSelect,
     required this.onPreview,
+    required this.onResults,
   });
   final List<CycleRecord> cycles;
   final CycleRecord? selected;
-  final GoogleSession session;
-  final VoidCallback onConnect;
+  final ValueChanged<CycleRecord>? onExport;
   final ValueChanged<String?> onSelect;
-  final ValueChanged<CycleRecord> onPreview;
+  final ValueChanged<CycleRecord> onPreview, onResults;
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(20),
@@ -381,74 +346,45 @@ class _AuditPage extends StatelessWidget {
                   .toList(),
           onChanged: onSelect,
         ),
-        const SizedBox(height: 24),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(session.email ?? 'حساب Google غير متصل'),
-          subtitle: Text(
-            selected!.auditClosed ? 'الدورة مغلقة' : 'الدورة مفتوحة',
-          ),
-          trailing: TextButton(
-            onPressed: onConnect,
-            child: Text(session.accountId == null ? 'ربط' : 'الحساب'),
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'يمكنك مراجعة الخطة وحفظها واستئناف التحقق. كتابة Google ما زالت مقفلة حتى اجتياز اختبارات السلامة.',
-        ),
         const SizedBox(height: 20),
-        FilledButton(
-          onPressed: () => onPreview(selected!),
-          child: const Text('إعداد التدقيق وعرض المعاينة'),
-        ),
+        if (selected case final cycle?) ...[
+          Text(cycle.auditClosed ? 'الدورة مغلقة' : 'الدورة مفتوحة'),
+          FilledButton(
+            onPressed: cycle.auditClosed ? null : () => onPreview(cycle),
+            child: const Text('إعداد التدقيق الجماعي'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => onResults(cycle),
+            icon: const Icon(Icons.fact_check_outlined),
+            label: const Text('عرض النتائج والسجل'),
+          ),
+          OutlinedButton.icon(
+            onPressed: onExport == null ? null : () => onExport!(cycle),
+            icon: const Icon(Icons.download),
+            label: const Text('تصدير النتائج إلى Excel'),
+          ),
+        ],
       ],
     ],
   );
 }
 
-List<List<String>> _rows(Object? value) {
-  if (value is! List) return [];
-  return value
-      .whereType<List>()
-      .map((row) => row.map((v) => v?.toString() ?? '').toList())
-      .toList();
-}
-
-String _classification(AuditClassification value) => switch (value) {
-  AuditClassification.agent => 'سحب وكيل',
-  AuditClassification.agentMultiple => 'سحب وكيل راتبين',
-  AuditClassification.management => 'سحب إدارة',
-  AuditClassification.notFound => 'غير موجود',
-};
-
-String _operationStatusLabel(OperationStatus status) => switch (status) {
-  OperationStatus.planned => 'مخطط محليًا',
-  OperationStatus.pending => 'بانتظار الاستئناف',
-  OperationStatus.executing => 'بدأت؛ النتيجة غير مؤكدة',
-  OperationStatus.verificationRequired => 'تحتاج تحققًا قبل الإعادة',
-  OperationStatus.verified => 'متحقق من النتيجة',
-  OperationStatus.conflict => 'تعارض — مراجعة مطلوبة',
-  OperationStatus.failed => 'فشل قبل إثبات الأثر',
-  OperationStatus.cancelled => 'أُلغيت محليًا قبل الكتابة',
-};
-
 class _SearchResult {
-  const _SearchResult(this.cycle, this.member, this.operations);
+  const _SearchResult(this.cycle, this.member, this.saved);
   final CycleRecord cycle;
   final MemberPreview member;
-  final List<OperationRecord> operations;
+  final LocalAuditResult? saved;
 }
 
 class _SearchPage extends StatefulWidget {
   const _SearchPage({
     required this.cycles,
     required this.db,
-    required this.session,
+    required this.onChanged,
   });
   final List<CycleRecord> cycles;
   final LocalAuditDatabase db;
-  final GoogleSession session;
+  final Future<void> Function() onChanged;
   @override
   State<_SearchPage> createState() => _SearchPageState();
 }
@@ -466,6 +402,7 @@ class _SearchPageState extends State<_SearchPage> {
   }
 
   Future<void> search() async {
+    if (busy) return;
     final id = normalizeMemberId(controller.text);
     if (id.isEmpty) {
       setState(() => error = 'أدخل رقم المستخدم أولًا.');
@@ -481,9 +418,8 @@ class _SearchPageState extends State<_SearchPage> {
       for (final cycle in widget.cycles.where(
         (c) => cycleId == null || c.id == cycleId,
       )) {
-        final management = _rows(cycle.snapshots['management']);
-        final agent = _rows(cycle.snapshots['agent']);
-        if (management.isEmpty) continue;
+        final management = cycleRows(cycle.snapshots['management']);
+        final agent = cycleRows(cycle.snapshots['agent']);
         final result = const AuditEngine().preview(
           AuditInput(
             management: AuditTable(
@@ -520,21 +456,24 @@ class _SearchPageState extends State<_SearchPage> {
             ),
             titleColumn: 'B',
             targetSpreadsheetId: '',
+            localDestination: true,
             agentColor: '#6252bd',
             managementColor: '#278164',
           ),
         );
         final member = result.members.single;
-        if (member.managementRow != null ||
+        final saved =
+            (await widget.db.listLocalAudit(
+              cycle.id,
+              memberId: id,
+            )).firstOrNull;
+        if (saved != null ||
+            member.managementRow != null ||
             member.agentRows.isNotEmpty ||
             member.conflicts.any(
               (c) => c.code == AuditConflictCode.duplicateManagement,
             )) {
-          final ops =
-              (await widget.db.listOperations(
-                cycle.id,
-              )).where((o) => o.memberId == id).toList();
-          found.add(_SearchResult(cycle, member, ops));
+          found.add(_SearchResult(cycle, member, saved));
         }
       }
       if (mounted) {
@@ -619,7 +558,7 @@ class _SearchPageState extends State<_SearchPage> {
                     result.cycle.name,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  Text(_classification(result.member.classification)),
+                  Text(result.member.classification.label),
                   Text(
                     'الإدارة: ${result.member.managementRow != null ? 'موجود' : 'غير مؤكد أو غير موجود'} · الوكيل: ${result.member.agentRows.length} صف',
                   ),
@@ -630,27 +569,30 @@ class _SearchPageState extends State<_SearchPage> {
                   ))
                     Text(conflict.message),
                   Text(
-                    result.operations.isEmpty
-                        ? 'لا توجد عملية تدقيق مسجلة لهذا المستخدم.'
-                        : 'العمليات المسجلة: ${result.operations.length}؛ غير المكتملة: ${result.operations.where((o) => !isOperationComplete(o.status)).length}',
+                    result.saved?.audited == true
+                        ? 'آخر حالة محفوظة: مدقق'
+                        : 'غير مدقق',
                   ),
-                  for (final operation in result.operations)
-                    Text(
-                      '${operation.type}: ${_operationStatusLabel(operation.status)}${operation.lastError == null ? '' : ' · ${operation.lastError}'}',
-                    ),
+                  if (result.saved?.target case final destination?)
+                    Text('الوجهة: $destination'),
                   OutlinedButton.icon(
                     onPressed:
-                        () => Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder:
-                                (_) => AuditFlowPage(
-                                  db: widget.db,
-                                  session: widget.session,
-                                  cycle: result.cycle,
-                                  memberId: result.member.memberId,
+                        result.cycle.auditClosed
+                            ? null
+                            : () async {
+                              await Navigator.of(context).push<bool>(
+                                MaterialPageRoute(
+                                  builder:
+                                      (_) => LocalAuditPage(
+                                        db: widget.db,
+                                        cycleId: result.cycle.id,
+                                        memberId: result.member.memberId,
+                                      ),
                                 ),
-                          ),
-                        ),
+                              );
+                              if (mounted) await widget.onChanged();
+                              if (mounted) await search();
+                            },
                     icon: const Icon(Icons.person_search_outlined),
                     label: const Text('مراجعة أو إعادة تدقيق هذا المستخدم'),
                   ),

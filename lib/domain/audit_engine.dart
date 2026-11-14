@@ -79,6 +79,7 @@ class AuditInput {
     required this.targetSpreadsheetId,
     required this.agentColor,
     required this.managementColor,
+    this.localDestination = false,
     this.manualTargets = const {},
     this.onlyMemberIds,
     this.statusColumn,
@@ -92,6 +93,7 @@ class AuditInput {
 
   /// Explicit destination: never inferred for imported files.
   final String targetSpreadsheetId;
+  final bool localDestination;
   final String agentColor;
   final String managementColor;
 
@@ -108,7 +110,15 @@ class AuditInput {
   final bool statusColumnIsVerifiedNonFinancial;
 }
 
-enum AuditClassification { agent, agentMultiple, management, notFound }
+enum AuditClassification {
+  agent('سحب وكيل'),
+  agentMultiple('سحب وكيل راتبين'),
+  management('سحب إدارة'),
+  notFound('غير موجود');
+
+  const AuditClassification(this.label);
+  final String label;
+}
 
 enum AuditConflictCode {
   invalidMemberId,
@@ -215,7 +225,7 @@ class AuditEngine {
     }
     // An empty agent snapshot is a legitimate dataset; a missing snapshot must
     // be distinguished by persistence before invoking the domain engine.
-    if (input.targetSpreadsheetId.trim().isEmpty) {
+    if (!input.localDestination && input.targetSpreadsheetId.trim().isEmpty) {
       common.add(
         const AuditConflict(
           AuditConflictCode.missingDestination,
@@ -241,6 +251,12 @@ class AuditEngine {
       (input.userInfo, titleColumn),
     ]) {
       final rows = entry.$1.rows.skip(entry.$1.hasHeader ? 1 : 0).toList();
+      if (input.localDestination &&
+          identical(entry.$1, input.userInfo) &&
+          entry.$2 == titleColumn &&
+          titleColumn != infoColumn) {
+        continue;
+      }
       if (rows.isNotEmpty && rows.every((r) => r.length <= entry.$2)) {
         common.add(
           const AuditConflict(
@@ -300,7 +316,8 @@ class AuditEngine {
           manualTitle != null && manualTitle.isNotEmpty
               ? manualTitle
               : storedTitle;
-      if (infoColumn >= cells.length || titleColumn >= cells.length) {
+      if (infoColumn >= cells.length ||
+          (!input.localDestination && titleColumn >= cells.length)) {
         memberConflicts.add(
           const AuditConflict(
             AuditConflictCode.missingColumn,
@@ -341,21 +358,26 @@ class AuditEngine {
           ),
         );
       }
-      if (title.isEmpty) {
+      final needsDestination = !input.localDestination || foundMgmt.isNotEmpty;
+      if (needsDestination && title.isEmpty) {
         memberConflicts.add(
           const AuditConflict(
             AuditConflictCode.missingTarget,
             'اسم الورقة الهدف فارغ',
           ),
         );
-      } else if (!_validSheetTitle(title)) {
+      } else if (needsDestination &&
+          !input.localDestination &&
+          !_validSheetTitle(title)) {
         memberConflicts.add(
           const AuditConflict(
             AuditConflictCode.invalidTarget,
             'اسم الورقة الهدف غير صالح',
           ),
         );
-      } else if ((targetSpellings[title.toLowerCase()]?.length ?? 0) > 1) {
+      } else if (needsDestination &&
+          !input.localDestination &&
+          (targetSpellings[title.toLowerCase()]?.length ?? 0) > 1) {
         memberConflicts.add(
           const AuditConflict(
             AuditConflictCode.targetNameCollision,
@@ -479,6 +501,11 @@ String _fingerprint(
     'userInfoMatches': infoMatches.map((r) => r.values).toList(),
     'effectiveTargetTitle': effectiveTargetTitle,
     'targetSpreadsheet': input.targetSpreadsheetId.trim(),
+    if (input.localDestination) ...{
+      'localDestination': true,
+      'managementRowNumbers': mgmt.map((row) => row.rowNumber).toList(),
+      'agentRowNumbers': agent.map((row) => row.rowNumber).toList(),
+    },
     'targetColumn': input.titleColumn.trim().toUpperCase(),
     'statusColumn': input.statusColumn?.trim().toUpperCase(),
     'statusVerified': input.statusColumnIsVerifiedNonFinancial,

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lork_audit_standalone/data/local_audit_database.dart';
-import 'package:lork_audit_standalone/google/google_sheets_gateway.dart';
 import 'package:lork_audit_standalone/ui/cycle_editor.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -62,6 +61,7 @@ void main() {
         },
       );
       await tester.runAsync(() => db.saveCycle(cycle));
+      final saved = (await tester.runAsync(() => db.getCycle(cycle.id)))!;
       await tester.pumpWidget(
         MaterialApp(
           locale: const Locale('ar'),
@@ -73,7 +73,7 @@ void main() {
             // ignore: deprecated_member_use
             GlobalCupertinoLocalizations.delegate,
           ],
-          home: CycleEditor(db: db, session: GoogleSession(), cycle: cycle),
+          home: CycleEditor(db: db, cycle: saved),
         ),
       );
       await tester.scrollUntilVisible(

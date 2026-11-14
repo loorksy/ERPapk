@@ -4,6 +4,8 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import '../domain/local_audit_result.dart';
+
 /// A locally stored cycle. JSON fields contain no credentials or tokens.
 class CycleRecord {
   const CycleRecord({
@@ -154,7 +156,7 @@ String cycleConfigurationFingerprint(CycleRecord cycle) =>
 class LocalAuditDatabase {
   LocalAuditDatabase._(this._db);
   final Database _db;
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   static Future<LocalAuditDatabase> open({
     String? databasePath,
@@ -172,10 +174,12 @@ class LocalAuditDatabase {
           await _createV1(db);
           await _upgradeToV2(db);
           await _upgradeToV3(db);
+          await _upgradeToV4(db);
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) await _upgradeToV2(db);
           if (oldVersion < 3) await _upgradeToV3(db);
+          if (oldVersion < 4) await _upgradeToV4(db);
         },
       ),
     );
@@ -228,7 +232,106 @@ class LocalAuditDatabase {
     )''');
   }
 
-  Future<void> saveCycle(CycleRecord cycle) async {
+  static Future<void> _upgradeToV4(DatabaseExecutor db) async {
+    await db.execute('''CREATE TABLE local_audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cycle_id TEXT NOT NULL, member_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, result TEXT NOT NULL,
+      FOREIGN KEY(cycle_id) REFERENCES cycles(id) ON DELETE CASCADE
+    )''');
+    await db.execute(
+      'CREATE INDEX local_audit_member ON local_audit_events(cycle_id, member_id, id)',
+    );
+  }
+
+  /// All effects of an approved batch are represented by one immutable
+  /// event per changed member in a single SQLite transaction.
+  Future<int> commitLocalAudit({
+    required CycleRecord expectedCycle,
+    required CycleRecord configuredCycle,
+    required List<LocalAuditResult> results,
+  }) async {
+    return _db.transaction((tx) async {
+      final rows = await tx.query(
+        'cycles',
+        where: 'id = ?',
+        whereArgs: [expectedCycle.id],
+      );
+      if (rows.isEmpty || rows.single['audit_closed'] == 1) {
+        throw StateError('الدورة مغلقة أو حُذفت.');
+      }
+      final current = CycleRecord._fromMap(rows.single);
+      if (current.updatedAt != expectedCycle.updatedAt) {
+        throw StateError(
+          'تغيرت الدورة بعد المعاينة. أعد فتحها واعرض المعاينة مرة أخرى.',
+        );
+      }
+      final previous = await tx.rawQuery(
+        'SELECT member_id, fingerprint FROM local_audit_events '
+        'WHERE cycle_id = ? AND id IN ('
+        'SELECT MAX(id) FROM local_audit_events WHERE cycle_id = ? GROUP BY member_id'
+        ')',
+        [current.id, current.id],
+      );
+      final fingerprints = {
+        for (final row in previous)
+          row['member_id'] as String: row['fingerprint'] as String,
+      };
+      final changes = tx.batch();
+      var count = 0;
+      for (final result in results) {
+        if (fingerprints[result.memberId] == result.fingerprint) continue;
+        fingerprints[result.memberId] = result.fingerprint;
+        changes.insert('local_audit_events', {
+          'cycle_id': current.id,
+          'member_id': result.memberId,
+          'fingerprint': result.fingerprint,
+          'result': jsonEncode(result.toJson()),
+        });
+        count++;
+      }
+      final values = configuredCycle._toMap();
+      if (count > 0 ||
+          rows.single['column_mappings'] != values['column_mappings'] ||
+          rows.single['snapshots'] != values['snapshots']) {
+        changes.update(
+          'cycles',
+          {
+            'column_mappings': values['column_mappings'],
+            'snapshots': values['snapshots'],
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [current.id],
+        );
+      }
+      await changes.commit(noResult: true);
+      return count;
+    });
+  }
+
+  Future<List<LocalAuditResult>> listLocalAudit(
+    String cycleId, {
+    String? memberId,
+    bool history = false,
+  }) async {
+    final rows = await _db.query(
+      'local_audit_events',
+      columns: ['member_id', 'result'],
+      where:
+          memberId == null ? 'cycle_id = ?' : 'cycle_id = ? AND member_id = ?',
+      whereArgs: [cycleId, if (memberId != null) memberId],
+      orderBy: 'id DESC',
+    );
+    final seen = <String>{};
+    return [
+      for (final row in rows)
+        if (history || seen.add(row['member_id'] as String))
+          LocalAuditResult.fromJson(_jsonMap(row['result'])),
+    ];
+  }
+
+  Future<void> saveCycle(CycleRecord cycle, {bool localOnly = false}) async {
     if (cycle.id.trim().isEmpty || cycle.name.trim().isEmpty) {
       throw ArgumentError('Cycle ID and name are required.');
     }
@@ -245,6 +348,11 @@ class LocalAuditDatabase {
         if (existing.single['audit_closed'] == 1) {
           throw StateError('Reopen the cycle before editing.');
         }
+        if (localOnly &&
+            cycle.updatedAt !=
+                CycleRecord._fromMap(existing.single).updatedAt) {
+          throw StateError('تغيرت الدورة. أعد فتح شاشة التعديل.');
+        }
         if (cycle.auditClosed) {
           throw StateError('Use closeCycle to close a cycle.');
         }
@@ -259,14 +367,18 @@ class LocalAuditDatabase {
           ],
           limit: 1,
         );
-        if (incomplete.isNotEmpty) {
+        if (!localOnly && incomplete.isNotEmpty) {
           throw StateError(
             'Resolve incomplete operations before editing the cycle.',
           );
         }
         await tx.update(
           'cycles',
-          cycle._toMap(),
+          {
+            ...cycle._toMap(),
+            if (localOnly)
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
           where: 'id = ?',
           whereArgs: [cycle.id],
         );
@@ -285,7 +397,7 @@ class LocalAuditDatabase {
         orderBy: 'created_at DESC',
       )).map(CycleRecord._fromMap).toList();
 
-  Future<void> deleteCycle(String id) async {
+  Future<void> deleteCycle(String id, {bool localOnly = false}) async {
     await _db.transaction((tx) async {
       final incomplete = await tx.query(
         'operations',
@@ -298,7 +410,7 @@ class LocalAuditDatabase {
         ],
         limit: 1,
       );
-      if (incomplete.isNotEmpty) {
+      if (!localOnly && incomplete.isNotEmpty) {
         throw StateError(
           'Resolve incomplete operations before deleting the cycle.',
         );
@@ -660,15 +772,20 @@ class LocalAuditDatabase {
     );
   }
 
-  Future<void> closeCycle(String id) => _changeClosed(id, true);
+  Future<void> closeCycle(String id, {bool localOnly = false}) =>
+      _changeClosed(id, true, localOnly: localOnly);
   Future<void> reopenCycle(String id) => _changeClosed(id, false);
 
-  Future<void> _changeClosed(String id, bool closed) async {
+  Future<void> _changeClosed(
+    String id,
+    bool closed, {
+    bool localOnly = false,
+  }) async {
     await _db.transaction((tx) async {
       final cycles = await tx.query('cycles', where: 'id = ?', whereArgs: [id]);
       if (cycles.isEmpty) throw StateError('Cycle not found.');
       if ((cycles.single['audit_closed'] == 1) == closed) return;
-      if (closed) {
+      if (closed && !localOnly) {
         final incomplete = await tx.query(
           'operations',
           columns: ['id'],
