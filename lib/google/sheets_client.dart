@@ -1,0 +1,457 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:http/http.dart' as http;
+
+import 'google_auth.dart';
+
+class SheetsApiException implements Exception {
+  SheetsApiException(this.message, {this.status, this.reason});
+  final String message;
+  final int? status;
+  final String? reason;
+
+  bool get isRateLimit =>
+      status == 429 ||
+      reason == 'rateLimitExceeded' ||
+      reason == 'userRateLimitExceeded' ||
+      RegExp('quota exceeded|429', caseSensitive: false).hasMatch(message);
+
+  @override
+  String toString() => message;
+}
+
+class SpreadsheetFile {
+  const SpreadsheetFile(this.id, this.name);
+  final String id;
+  final String name;
+}
+
+class SheetProps {
+  const SheetProps(this.sheetId, this.title);
+  final int sheetId;
+  final String title;
+}
+
+class SpreadsheetMeta {
+  const SpreadsheetMeta({
+    required this.spreadsheetId,
+    required this.spreadsheetUrl,
+    required this.sheets,
+  });
+  final String spreadsheetId;
+  final String? spreadsheetUrl;
+  final List<SheetProps> sheets;
+
+  String get url =>
+      spreadsheetUrl ??
+      'https://docs.google.com/spreadsheets/d/$spreadsheetId/edit';
+}
+
+/// The subset of the Google Sheets / Drive APIs used by ERP's audit.
+abstract class SheetsApi {
+  Future<List<SpreadsheetFile>> listSpreadsheets();
+  Future<SpreadsheetMeta> getSpreadsheet(String spreadsheetId);
+  Future<List<List<String>>> valuesGet(String spreadsheetId, String range);
+  Future<String?> valuesUpdate(
+    String spreadsheetId,
+    String range,
+    List<List<Object?>> values,
+  );
+  Future<String?> valuesAppend(
+    String spreadsheetId,
+    String range,
+    List<List<Object?>> values,
+  );
+  Future<List<Map<String, dynamic>>> batchUpdate(
+    String spreadsheetId,
+    List<Map<String, dynamic>> requests,
+  );
+  Future<String> createSpreadsheet(String title, List<String> sheetTitles);
+}
+
+/// REST implementation over the phone's Google access token.
+class GoogleSheetsApi implements SheetsApi {
+  GoogleSheetsApi(this.auth, {http.Client? client})
+    : _client = client ?? http.Client();
+
+  final GoogleAuth auth;
+  final http.Client _client;
+
+  Future<Map<String, dynamic>> _send(
+    String method,
+    Uri uri, {
+    Object? body,
+    bool retried = false,
+  }) async {
+    final token = await auth.accessToken(forceRefresh: retried);
+    final headers = <String, String>{
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json; charset=utf-8',
+    };
+    http.Response response;
+    try {
+      final req = http.Request(method, uri)..headers.addAll(headers);
+      if (body != null) req.body = jsonEncode(body);
+      final streamed = await _client
+          .send(req)
+          .timeout(const Duration(seconds: 120));
+      response = await http.Response.fromStream(
+        streamed,
+      ).timeout(const Duration(seconds: 120));
+    } on TimeoutException {
+      throw SheetsApiException('انتهت مهلة الاتصال بـ Google. حاول مرة أخرى.');
+    } on Exception catch (e) {
+      throw SheetsApiException('خطأ في الاتصال بـ Google: $e');
+    }
+    if (response.statusCode == 401 && !retried) {
+      return _send(method, uri, body: body, retried: true);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      String message = 'رفض Google الطلب (${response.statusCode})';
+      String? reason;
+      try {
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        final err = decoded is Map ? decoded['error'] : null;
+        if (err is Map) {
+          if (err['message'] is String) message = err['message'] as String;
+          final errors = err['errors'];
+          if (errors is List && errors.isNotEmpty && errors.first is Map) {
+            reason = (errors.first as Map)['reason']?.toString();
+          }
+        }
+      } catch (_) {}
+      if (response.statusCode == 401) {
+        message = 'انتهى تفويض Google. أعد ربط الحساب من الإعدادات.';
+      }
+      throw SheetsApiException(
+        message,
+        status: response.statusCode,
+        reason: reason,
+      );
+    }
+    if (response.bodyBytes.isEmpty) return <String, dynamic>{};
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+  }
+
+  /// [path] must already be percent-encoded (ids and A1 ranges go through
+  /// `Uri.encodeComponent`); `Uri.https` would encode the `%` a second time.
+  static Uri _sheets(String path, [Map<String, String>? query]) {
+    final uri = Uri.parse('https://sheets.googleapis.com/v4/spreadsheets$path');
+    return query == null ? uri : uri.replace(queryParameters: query);
+  }
+
+  @override
+  Future<List<SpreadsheetFile>> listSpreadsheets() async {
+    final json = await _send(
+      'GET',
+      Uri.https('www.googleapis.com', '/drive/v3/files', {
+        'q':
+            "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+        'pageSize': '200',
+        'fields': 'files(id, name)',
+        'orderBy': 'modifiedTime desc',
+      }),
+    );
+    return [
+      for (final f in (json['files'] as List? ?? const []))
+        SpreadsheetFile(
+          (f as Map)['id'].toString(),
+          (f['name'] ?? f['id']).toString(),
+        ),
+    ];
+  }
+
+  @override
+  Future<SpreadsheetMeta> getSpreadsheet(String spreadsheetId) async {
+    final json = await _send(
+      'GET',
+      _sheets('/${Uri.encodeComponent(spreadsheetId)}', {
+        'fields':
+            'spreadsheetId,spreadsheetUrl,sheets(properties(sheetId,title))',
+      }),
+    );
+    return SpreadsheetMeta(
+      spreadsheetId: (json['spreadsheetId'] ?? spreadsheetId).toString(),
+      spreadsheetUrl: json['spreadsheetUrl'] as String?,
+      sheets: [
+        for (final s in (json['sheets'] as List? ?? const []))
+          SheetProps(
+            ((s as Map)['properties']['sheetId'] as num).toInt(),
+            (s['properties']['title'] ?? '').toString(),
+          ),
+      ],
+    );
+  }
+
+  @override
+  Future<List<List<String>>> valuesGet(
+    String spreadsheetId,
+    String range,
+  ) async {
+    final json = await _send(
+      'GET',
+      _sheets(
+        '/${Uri.encodeComponent(spreadsheetId)}/values/${Uri.encodeComponent(range)}',
+      ),
+    );
+    return [
+      for (final row in (json['values'] as List? ?? const []))
+        [for (final cell in (row as List)) cell == null ? '' : cell.toString()],
+    ];
+  }
+
+  @override
+  Future<String?> valuesUpdate(
+    String spreadsheetId,
+    String range,
+    List<List<Object?>> values,
+  ) async {
+    final json = await _send(
+      'PUT',
+      _sheets(
+        '/${Uri.encodeComponent(spreadsheetId)}/values/${Uri.encodeComponent(range)}',
+        {'valueInputOption': 'USER_ENTERED'},
+      ),
+      body: {'range': range, 'majorDimension': 'ROWS', 'values': values},
+    );
+    return json['updatedRange'] as String?;
+  }
+
+  @override
+  Future<String?> valuesAppend(
+    String spreadsheetId,
+    String range,
+    List<List<Object?>> values,
+  ) async {
+    final json = await _send(
+      'POST',
+      _sheets(
+        '/${Uri.encodeComponent(spreadsheetId)}/values/${Uri.encodeComponent(range)}:append',
+        {'valueInputOption': 'USER_ENTERED', 'insertDataOption': 'INSERT_ROWS'},
+      ),
+      body: {'majorDimension': 'ROWS', 'values': values},
+    );
+    final updates = json['updates'];
+    return updates is Map ? updates['updatedRange'] as String? : null;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> batchUpdate(
+    String spreadsheetId,
+    List<Map<String, dynamic>> requests,
+  ) async {
+    final json = await _send(
+      'POST',
+      _sheets('/${Uri.encodeComponent(spreadsheetId)}:batchUpdate'),
+      body: {'requests': requests},
+    );
+    return [
+      for (final r in (json['replies'] as List? ?? const []))
+        Map<String, dynamic>.from(r as Map),
+    ];
+  }
+
+  @override
+  Future<String> createSpreadsheet(
+    String title,
+    List<String> sheetTitles,
+  ) async {
+    final json = await _send(
+      'POST',
+      _sheets(''),
+      body: {
+        'properties': {'title': title},
+        'sheets': [
+          for (final t in sheetTitles)
+            {
+              'properties': {'title': t},
+            },
+        ],
+      },
+    );
+    final id = json['spreadsheetId'] as String?;
+    if (id == null || id.isEmpty) {
+      throw SheetsApiException('فشل إنشاء جدول الدورة في Google');
+    }
+    return id;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Port of services/googleSheetsReadHelpers.js
+// ---------------------------------------------------------------------------
+
+const int sheetBatchRows = 5000;
+const int sheetMaxRows = 150000;
+
+Future<void> sleepMs(int ms) =>
+    Future<void>.delayed(Duration(milliseconds: ms));
+
+final Random _jitter = Random();
+
+/// ERP `withSheetsRetry`: retries only on rate limiting (429).
+Future<T> withSheetsRetry<T>(
+  Future<T> Function() fn, {
+  int maxAttempts = 12,
+  void Function(String message)? onWait,
+}) async {
+  Object? lastErr;
+  for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } on SheetsApiException catch (e) {
+      lastErr = e;
+      if (e.isRateLimit) {
+        final backoffSec = min(120, max(5, 4 * pow(2, attempt).toInt()));
+        final waitMs = backoffSec * 1000 + _jitter.nextInt(500);
+        onWait?.call(
+          'حد طلبات Google — انتظار ${(waitMs / 1000).round()} ثانية ثم إعادة المحاولة (${attempt + 1}/$maxAttempts)',
+        );
+        await sleepMs(waitMs);
+        continue;
+      }
+      rethrow;
+    }
+  }
+  throw lastErr ?? SheetsApiException('فشل طلب Google');
+}
+
+String escapeSheetTitleForRange(String title) => title.replaceAll("'", "''");
+
+String rangeA1ZZ(String title, int startRow, int endRow) =>
+    "'${escapeSheetTitleForRange(title)}'!A$startRow:ZZ$endRow";
+
+String rangeWholeSheet(String title) =>
+    "'${escapeSheetTitleForRange(title)}'!A:ZZ";
+
+/// ERP `fetchSheetValuesBatched`.
+Future<List<List<String>>> fetchSheetValuesBatched(
+  SheetsApi sheets,
+  String spreadsheetId,
+  String title, {
+  int startRow = 1,
+}) async {
+  final all = <List<String>>[];
+  var row = startRow;
+  while (row <= sheetMaxRows) {
+    final endRow = row + sheetBatchRows - 1;
+    final batch = await withSheetsRetry(
+      () => sheets.valuesGet(spreadsheetId, rangeA1ZZ(title, row, endRow)),
+    );
+    if (batch.isEmpty) break;
+    all.addAll(batch);
+    if (batch.length < sheetBatchRows) break;
+    row = endRow + 1;
+  }
+  return all;
+}
+
+class SheetFetchResult {
+  const SheetFetchResult(this.values, this.sheetTitleUsed);
+  final List<List<String>> values;
+  final String? sheetTitleUsed;
+}
+
+/// ERP `fetchSheetWithFallback`.
+Future<SheetFetchResult> fetchSheetWithFallback(
+  SheetsApi sheets,
+  String spreadsheetId,
+  String? preferredSheetName, [
+  String? excludeSheetTitle,
+]) async {
+  final meta = await withSheetsRetry(
+    () => sheets.getSpreadsheet(spreadsheetId),
+  );
+  final titles = [
+    for (final s in meta.sheets)
+      if (s.title.isNotEmpty) s.title,
+  ];
+  if (titles.isEmpty) return const SheetFetchResult([], null);
+
+  final preferred = preferredSheetName?.trim();
+  final exclude = excludeSheetTitle?.trim();
+  final toTry = <String>[];
+  if (preferred != null && preferred.isNotEmpty && preferred != exclude) {
+    toTry.add(preferred);
+  }
+  for (final t in titles) {
+    if (t != exclude && !toTry.contains(t)) toTry.add(t);
+  }
+  if (toTry.isEmpty) toTry.add(titles.first);
+
+  var best = const SheetFetchResult([], null);
+  for (final title in toTry) {
+    try {
+      final values = await fetchSheetValuesBatched(
+        sheets,
+        spreadsheetId,
+        title,
+      );
+      if (values.length > best.values.length) {
+        best = SheetFetchResult(values, title);
+      }
+      if (values.isNotEmpty &&
+          preferred != null &&
+          preferred.isNotEmpty &&
+          title == preferred) {
+        return SheetFetchResult(values, title);
+      }
+    } catch (_) {
+      // try next sheet
+    }
+  }
+  if (best.values.isNotEmpty) return best;
+  try {
+    final values = await fetchSheetValuesBatched(
+      sheets,
+      spreadsheetId,
+      toTry.first,
+    );
+    return SheetFetchResult(values, toTry.first);
+  } catch (_) {}
+  return SheetFetchResult(const [], toTry.first);
+}
+
+/// ERP `batchUpdateRequestsInChunks` (defaults: 8 requests, 1.5 s apart).
+Future<void> batchUpdateRequestsInChunks(
+  SheetsApi sheets,
+  String spreadsheetId,
+  List<Map<String, dynamic>> requests, {
+  int chunkSize = 8,
+  int delayMs = 1500,
+  void Function(int done, int total)? onProgress,
+}) async {
+  if (requests.isEmpty) return;
+  for (var i = 0; i < requests.length; i += chunkSize) {
+    final chunk = requests.sublist(i, min(i + chunkSize, requests.length));
+    await withSheetsRetry(() => sheets.batchUpdate(spreadsheetId, chunk));
+    onProgress?.call(min(i + chunkSize, requests.length), requests.length);
+    if (i + chunkSize < requests.length && delayMs > 0) await sleepMs(delayMs);
+  }
+}
+
+/// ERP `getSheetIdByTitle`.
+int? getSheetIdByTitle(SpreadsheetMeta meta, String? title) {
+  if (meta.sheets.isEmpty) return null;
+  final t = title?.trim();
+  if (t != null && t.isNotEmpty) {
+    for (final s in meta.sheets) {
+      if (s.title == t) return s.sheetId;
+    }
+    return null;
+  }
+  return meta.sheets.first.sheetId;
+}
+
+/// ERP `parseRangeStartRowIndex0`: `'Sheet'!A7:ZZ9` → 6.
+int parseRangeStartRowIndex0(String? updatedRange) {
+  final m = RegExp(r'![A-Za-z]+(\d+)').firstMatch(updatedRange ?? '');
+  if (m == null) return 0;
+  return max(0, int.parse(m.group(1)!) - 1);
+}
+
+String googleSheetUrl(String spreadsheetId) =>
+    'https://docs.google.com/spreadsheets/d/$spreadsheetId/edit';

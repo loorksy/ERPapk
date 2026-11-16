@@ -7,7 +7,7 @@
 | البيان | القيمة المتحقق منها |
 |---|---|
 | applicationId وnamespace | `cloud.lork.audit.standalone` |
-| versionName / versionCode | `1.0.0` / `1` |
+| versionName / versionCode | `2.0.0` / `2` (البيانات أدناه عن APK 1.0.0 المتحقق منه سابقًا) |
 | Release alias | `lork-audit-release` |
 | المخزن والمفتاح | JKS، RSA 2048 بت |
 | SHA-1 لشهادة Release | `B1:12:AB:9A:C6:2B:E1:57:DA:D6:3D:ED:8C:1E:49:B0:CB:CE:46:3B` |
@@ -86,4 +86,4 @@ openssl x509 -in docs/certificates/lork-audit-release.pem -noout -subject -dates
 openssl x509 -in docs/certificates/lork-audit-release.pem -noout -fingerprint -sha256
 ```
 
-**حدود الجاهزية:** الكتابة إلى Google ما زالت مقفلة في `AuditSyncEngine._writesEnabled()`، وOAuth ما زال Testing. نجاح البناء والتوقيع لا يثبت صلاحية التدقيق الحي أو سلامة المزامنة.
+**حدود الجاهزية:** منذ 2.0.0 الكتابة إلى Google مفعّلة لمطابقة ERP، لكنها لم تُختبر على جداول حقيقية، وOAuth ما زال Testing. نجاح البناء والتوقيع لا يثبت صلاحية التدقيق الحي. يبني GitHub Actions الآن APK 2.0.0؛ تحقق من التوقيع والبصمة من سجل التشغيل.
