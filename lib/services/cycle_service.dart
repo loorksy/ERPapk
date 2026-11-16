@@ -10,10 +10,18 @@ class ColumnOption {
 }
 
 class SyncOutcome {
-  const SyncOutcome(this.success, this.message, [this.detail]);
+  const SyncOutcome(
+    this.success,
+    this.message, [
+    this.detail,
+    this.transient = false,
+  ]);
   final bool success;
   final String message;
   final String? detail;
+
+  /// Failed only because Google could not be reached; worth retrying.
+  final bool transient;
 }
 
 /// Port of ERP's cycle routes (`routes/sheet.js`): create, edit, delete,
@@ -133,6 +141,8 @@ class CycleService {
   }) async {
     try {
       return await _syncCycle(id, userInfoSpreadsheetId, userInfoSheetName);
+    } on SheetsApiException catch (e) {
+      return SyncOutcome(false, e.message, null, e.transient);
     } catch (e) {
       final m = e.toString();
       return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الدورة من Google' : m);

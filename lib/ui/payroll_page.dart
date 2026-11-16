@@ -1,6 +1,7 @@
 // Flutter 3.50 deprecates its bundled Material exports; keep the SDK widgets.
 // ignore_for_file: deprecated_member_use
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -80,6 +81,8 @@ class _PayrollPageState extends State<PayrollPage> {
   // Run
   bool _running = false;
   String? _progress;
+  AuditJob? _job;
+  Timer? _poll;
   PayrollResult? _result;
   bool _exporting = false;
 
@@ -112,6 +115,7 @@ class _PayrollPageState extends State<PayrollPage> {
 
   @override
   void dispose() {
+    _poll?.cancel();
     _discount.dispose();
     super.dispose();
   }
@@ -121,6 +125,7 @@ class _PayrollPageState extends State<PayrollPage> {
     await _loadCycles();
     await _restoreDraft();
     await _refreshSession();
+    await _watchJob();
   }
 
   // ------------------------------------------------------------ settings
@@ -556,82 +561,62 @@ class _PayrollPageState extends State<PayrollPage> {
       ),
     );
     if (!mounted) return;
-    setState(() {
-      _running = true;
-      _progress =
-          source is LocalUserInfo ? 'تدقيق على الهاتف...' : '1/2 مزامنة...';
-    });
-    try {
-      if (source is GoogleUserInfo) {
-        // ERP `payrollSyncForAudit`: the audit stops if this sync fails.
-        final sync = await _s.cycles.syncCycle(
-          cycleId,
-          userInfoSpreadsheetId: source.spreadsheetId,
-          userInfoSheetName: source.sheetName,
-        );
-        if (!mounted) return;
-        if (!sync.success) {
-          showToast(context, sync.message, ToastType.error);
-          return;
-        }
+    final rawDiscount = _discount.text.trim();
+    final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
+    final request = PayrollRequest(
+      cycleId: cycleId,
+      userInfo: source,
+      discountRate: parsed == null || parsed.isNaN ? null : parsed,
+      agentColor: _agentColor,
+      managementColor: _mgmtColor,
+      columns: AuditColumns.of(
+        userInfoUserIdCol: _userInfoUserIdCol,
+        userInfoTitleCol: _userInfoTitleCol,
+        userInfoSalaryCol: _userInfoSalaryCol,
+        cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
+        cycleAgentUserIdCol: _cycleAgentUserIdCol,
+        cycleAgentSalaryCol: _cycleAgentSalaryCol,
+      ),
+      userInfoStatusCol: _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
+    );
+    _saveDraft();
+
+    if (source is GoogleUserInfo) {
+      // Runs in the background (continues when the app is closed and
+      // resumes after a lost connection); this page follows its progress.
+      final active = await _s.db.pendingAuditJobs();
+      if (!mounted) return;
+      if (active.isNotEmpty) {
         showToast(
           context,
-          sync.detail == null
-              ? sync.message
-              : '${sync.message} — ${sync.detail}',
-          ToastType.success,
+          'يوجد تدقيق قيد التنفيذ. انتظر انتهاءه ثم أعد المحاولة.',
+          ToastType.warning,
         );
-        setState(() => _progress = '2/2 تطبيق...');
+        await _watchJob();
+        return;
       }
-      final rawDiscount = _discount.text.trim();
-      final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
+      await _s.startAuditJob(request);
+      if (!mounted) return;
+      setState(() => _result = null);
+      await _watchJob();
+      return;
+    }
+
+    setState(() {
+      _running = true;
+      _progress = 'تدقيق على الهاتف...';
+    });
+    try {
       final result = await _s.payroll.execute(
-        PayrollRequest(
-          cycleId: cycleId,
-          userInfo: source,
-          discountRate: parsed == null || parsed.isNaN ? null : parsed,
-          agentColor: _agentColor,
-          managementColor: _mgmtColor,
-          columns: AuditColumns.of(
-            userInfoUserIdCol: _userInfoUserIdCol,
-            userInfoTitleCol: _userInfoTitleCol,
-            userInfoSalaryCol: _userInfoSalaryCol,
-            cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
-            cycleAgentUserIdCol: _cycleAgentUserIdCol,
-            cycleAgentSalaryCol: _cycleAgentSalaryCol,
-          ),
-          userInfoStatusCol:
-              _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
-        ),
+        request,
         onProgress: (m) {
-          if (!mounted) return;
-          setState(
-            () =>
-                _progress =
-                    source is LocalUserInfo
-                        ? m
-                        : (m.startsWith('1/2') ? '2/2 تطبيق...' : m),
-          );
+          if (mounted) setState(() => _progress = m);
         },
       );
       if (!mounted) return;
       _s.cyclesChanged();
-      if (!result.success) {
-        showToast(context, result.message, ToastType.error);
-        return;
-      }
-      setState(() => _result = result);
-      var toast = result.message;
-      if (result.cycleSynced && !toast.contains('تمت مزامنة جداول الدورة')) {
-        toast = 'تمت مزامنة جداول الدورة من Google ثم $toast';
-      }
-      showToast(
-        context,
-        toast,
-        result.applied ? ToastType.success : ToastType.warning,
-      );
+      _announce(result);
       await _refreshSession();
-      _saveDraft();
     } finally {
       if (mounted) {
         setState(() {
@@ -640,6 +625,235 @@ class _PayrollPageState extends State<PayrollPage> {
         });
       }
     }
+  }
+
+  /// Shows the outcome of an audit like ERP (toast + results section).
+  void _announce(PayrollResult result) {
+    if (!result.success) {
+      showToast(context, result.message, ToastType.error);
+      return;
+    }
+    setState(() => _result = result);
+    var toast = result.message;
+    if (result.cycleSynced && !toast.contains('تمت مزامنة جداول الدورة')) {
+      toast = 'تمت مزامنة جداول الدورة من Google ثم $toast';
+    }
+    if (result.duplicates.isNotEmpty) {
+      toast +=
+          ' — ${result.duplicates.length} رقم مكرر في جدول معلومات المستخدمين (انظر التفاصيل)';
+    }
+    showToast(
+      context,
+      toast,
+      result.applied ? ToastType.success : ToastType.warning,
+    );
+  }
+
+  // ----------------------------------------------------- background job
+
+  /// Follows the latest audit job of the selected cycle.
+  Future<void> _watchJob() async {
+    _poll?.cancel();
+    if (_cycleId.isEmpty) {
+      setState(() => _job = null);
+      return;
+    }
+    final job = await _s.db.latestAuditJob(int.parse(_cycleId));
+    if (!mounted) return;
+    setState(() => _job = job);
+    if (job == null) return;
+    if (job.active) {
+      _poll = Timer.periodic(const Duration(seconds: 1), (_) => _pollJob());
+    } else {
+      await _settleJob(job);
+    }
+  }
+
+  Future<void> _pollJob() async {
+    final current = _job;
+    if (current == null) return;
+    final job = await _s.db.getAuditJob(current.id);
+    if (!mounted || job == null) return;
+    setState(() => _job = job);
+    if (!job.active) {
+      _poll?.cancel();
+      await _settleJob(job);
+      _s.cyclesChanged();
+      await _refreshSession();
+    } else if (job.status == AuditJob.queued &&
+        DateTime.now().difference(job.updatedAt).inSeconds > 20) {
+      // The worker has not picked the job up yet: make sure it is scheduled.
+      await _s.resumeAuditJobs();
+    }
+  }
+
+  /// A finished job: announce it once, and keep showing its result.
+  Future<void> _settleJob(AuditJob job) async {
+    final json = job.result;
+    final result = json == null ? null : PayrollResult.fromJson(json);
+    if (!job.seen) {
+      await _s.db.updateAuditJob(job.id, {'seen': 1});
+      if (!mounted) return;
+      if (result != null) {
+        _announce(result);
+      } else if (job.error != null) {
+        showToast(context, job.error!, ToastType.error);
+      }
+    } else if (result != null && result.success && _result == null) {
+      setState(() => _result = result);
+    }
+  }
+
+  String _busyLabel() {
+    final text = _running ? _progress : _job?.progress;
+    if (_job?.status == AuditJob.waiting) return 'بانتظار الاتصال...';
+    if (text?.startsWith('2/2') == true) return '2/2 تطبيق...';
+    if (text?.startsWith('1/2') == true) return '1/2 مزامنة...';
+    return 'جاري التدقيق...';
+  }
+
+  Widget _jobPanel(AuditJob job) {
+    final waiting = job.status == AuditJob.waiting;
+    final total = job.stepTotal;
+    final done = job.stepNext.clamp(0, total);
+    final duplicates =
+        job.result == null
+            ? const <DuplicateGroup>[]
+            : PayrollResult.fromJson(job.result!).duplicates;
+    return NoticeBox(
+      bg: waiting ? Tw.amber50 : Tw.indigo50,
+      border: waiting ? Tw.amber200 : Tw.indigo200,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              FaIcon(
+                waiting ? FontAwesomeIcons.wifi : FontAwesomeIcons.rotate,
+                size: 13,
+                color: waiting ? Tw.amber700 : Tw.indigo600,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  waiting
+                      ? 'التدقيق متوقف مؤقتًا — بانتظار الاتصال'
+                      : 'التدقيق يعمل في الخلفية',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: waiting ? Tw.amber900 : Tw.indigo900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            job.progress ?? '',
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: Tw.slate700,
+              height: 1.5,
+            ),
+          ),
+          if (total > 0) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: done / total,
+                minHeight: 6,
+                backgroundColor: Colors.white,
+                color: waiting ? Tw.amber500 : Tw.indigo600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'الخطوة $done من $total',
+              style: const TextStyle(fontSize: 11.5, color: Tw.slate500),
+            ),
+          ],
+          const SizedBox(height: 8),
+          const Text(
+            'يمكنك إغلاق التطبيق: يكمل التدقيق في الخلفية، وإذا انقطع الإنترنت يستأنف من الخطوة التي توقف عندها (النسخ، الراتب والحالة، التلوين).',
+            style: TextStyle(fontSize: 11.5, color: Tw.slate500, height: 1.6),
+          ),
+          if (waiting) ...[
+            const SizedBox(height: 10),
+            ErpButton(
+              label: 'استئناف الآن',
+              icon: FontAwesomeIcons.play,
+              kind: ErpButtonKind.amber,
+              height: 40,
+              fontSize: 12.5,
+              onPressed: _resumeNow,
+            ),
+          ],
+          if (duplicates.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _duplicatesBox(duplicates),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Duplicated ids of the user-info sheet: id, rows, and which row counts.
+  Widget _duplicatesBox(List<DuplicateGroup> duplicates) {
+    const t = TextStyle(fontSize: 12.5, color: Tw.slate700, height: 1.6);
+    final shown = duplicates.take(100).toList();
+    return NoticeBox(
+      bg: Tw.amber50,
+      border: Tw.amber200,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'أرقام مكررة في جدول معلومات المستخدمين: ${duplicates.length}',
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Tw.amber800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'دُقق أول صف لكل رقم ونُسخ مرة واحدة فقط؛ الصفوف الأخرى كُتب فيها «مكرر» ولم تُنسخ.',
+            style: TextStyle(fontSize: 11.5, color: Tw.amber900, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          for (final d in shown)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text.rich(
+                TextSpan(
+                  style: t,
+                  children: [
+                    TextSpan(
+                      text: d.userId,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    TextSpan(
+                      text:
+                          ' — الصفوف: ${d.rows.join('، ')} (دُقق الصف ${d.firstRow})',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (duplicates.length > shown.length)
+            Text(
+              '… و${duplicates.length - shown.length} رقم آخر',
+              style: const TextStyle(fontSize: 11.5, color: Tw.slate500),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resumeNow() async {
+    await _s.resumeAuditJobs(now: true);
+    if (mounted) showToast(context, 'جاري استئناف التدقيق...', ToastType.info);
   }
 
   Future<void> _export() async {
@@ -714,8 +928,12 @@ class _PayrollPageState extends State<PayrollPage> {
           value: _cycleId,
           onChanged: (v) {
             // ERP: changing the cycle refreshes the session and the draft.
-            setState(() => _cycleId = v);
+            setState(() {
+              _cycleId = v;
+              _result = null;
+            });
             _refreshSession();
+            _watchJob();
             _saveDraft();
           },
         ),
@@ -780,13 +998,8 @@ class _PayrollPageState extends State<PayrollPage> {
             label: 'تدقيق',
             icon: FontAwesomeIcons.clipboardCheck,
             kind: ErpButtonKind.emerald,
-            loading: _running,
-            loadingLabel:
-                _progress?.startsWith('2/2') == true
-                    ? '2/2 تطبيق...'
-                    : (_progress?.startsWith('1/2') == true
-                        ? '1/2 مزامنة...'
-                        : 'جاري التدقيق...'),
+            loading: _running || (_job?.active ?? false),
+            loadingLabel: _busyLabel(),
             onPressed: _runAudit,
           ),
           if (_running && _progress != null) ...[
@@ -795,6 +1008,10 @@ class _PayrollPageState extends State<PayrollPage> {
               _progress!,
               style: const TextStyle(fontSize: 12, color: Tw.slate500),
             ),
+          ],
+          if (_job?.active ?? false) ...[
+            const SizedBox(height: 12),
+            _jobPanel(_job!),
           ],
           const SizedBox(height: 6),
           Text(
@@ -1142,6 +1359,10 @@ class _PayrollPageState extends State<PayrollPage> {
         li('سحب وكالة', s.agent),
         li('سحب إدارة', s.management),
         li('غير موجود', s.notFound),
+        if (r.duplicates.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _duplicatesBox(r.duplicates),
+        ],
         if (d != null) ...[const SizedBox(height: 12), _diagnosticBox(d)],
         if (r.sampleUserIds.isNotEmpty) ...[
           const SizedBox(height: 12),

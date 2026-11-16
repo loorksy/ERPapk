@@ -7,10 +7,23 @@ import 'package:http/http.dart' as http;
 import 'google_auth.dart';
 
 class SheetsApiException implements Exception {
-  SheetsApiException(this.message, {this.status, this.reason});
+  SheetsApiException(
+    this.message, {
+    this.status,
+    this.reason,
+    this.network = false,
+  });
   final String message;
   final int? status;
   final String? reason;
+
+  /// No answer from Google (no internet, DNS, timeout, connection reset).
+  final bool network;
+
+  /// Worth retrying later: lost connection, Google server errors and
+  /// rate limits that outlasted [withSheetsRetry].
+  bool get transient =>
+      network || isRateLimit || (status != null && status! >= 500);
 
   bool get isRateLimit =>
       status == 429 ||
@@ -122,9 +135,16 @@ class GoogleSheetsApi implements SheetsApi {
         streamed,
       ).timeout(const Duration(seconds: 120));
     } on TimeoutException {
-      throw SheetsApiException('انتهت مهلة الاتصال بـ Google. حاول مرة أخرى.');
+      throw SheetsApiException(
+        'انقطع الاتصال بـ Google (انتهت المهلة).',
+        network: true,
+      );
     } on Exception catch (e) {
-      throw SheetsApiException('خطأ في الاتصال بـ Google: $e');
+      throw SheetsApiException(
+        'لا يوجد اتصال بالإنترنت أو تعذر الوصول إلى Google.',
+        network: true,
+        reason: e.toString(),
+      );
     }
     if (response.statusCode == 401 && !retried) {
       return _send(method, uri, body: body, retried: true);

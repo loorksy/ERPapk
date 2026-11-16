@@ -7,6 +7,18 @@ class FakeSheets implements SheetsApi {
   final ids = <String, Map<String, int>>{};
   final colors = <String, Map<int, String>>{}; // "ss|sheetId" -> row -> rgb
   final log = <String>[];
+
+  /// When it returns true for an operation, that call fails as if the
+  /// internet dropped (used to test resuming).
+  bool Function(String op, Object? payload)? failWhen;
+
+  void _maybeFail(String op, Object? payload) {
+    if (failWhen?.call(op, payload) ?? false) {
+      log.add('NETWORK DOWN $op');
+      throw SheetsApiException('no internet', network: true);
+    }
+  }
+
   int _next = 100;
 
   void add(String ss, String title, List<List<String>> rows) {
@@ -95,6 +107,7 @@ class FakeSheets implements SheetsApi {
     String range,
     List<List<Object?>> values,
   ) async {
+    _maybeFail('valuesUpdate', range);
     log.add('UPDATE $id $range (${values.length} rows)');
     final (title, col, row, _) = _range(range);
     _write(id, title, columnLetterToIndex(col)!, row, values);
@@ -107,6 +120,7 @@ class FakeSheets implements SheetsApi {
     String range,
     List<List<Object?>> values,
   ) async {
+    _maybeFail('valuesAppend', range);
     log.add('APPEND $id $range (${values.length} rows)');
     final (title, _, _, _) = _range(range);
     final rows = books[id]![title]!;
@@ -120,6 +134,7 @@ class FakeSheets implements SheetsApi {
     String id,
     List<Map<String, dynamic>> requests,
   ) async {
+    _maybeFail('batchUpdate', requests);
     log.add(
       'BATCH $id ${requests.length} [${requests.map((r) => r.keys.first).toSet().join(',')}]',
     );
@@ -146,11 +161,14 @@ class FakeSheets implements SheetsApi {
                 as Map;
         final hex =
             '#${[c['red'], c['green'], c['blue']].map((v) => ((v as num) * 255).round().toRadixString(16).padLeft(2, '0')).join()}';
-        colors.putIfAbsent(
-              '$id|${range['sheetId']}',
-              () => {},
-            )[range['startRowIndex'] as int] =
-            hex;
+        final byRow = colors.putIfAbsent('$id|${range['sheetId']}', () => {});
+        for (
+          var row = range['startRowIndex'] as int;
+          row < (range['endRowIndex'] as int);
+          row++
+        ) {
+          byRow[row] = hex;
+        }
         replies.add({});
       }
     }

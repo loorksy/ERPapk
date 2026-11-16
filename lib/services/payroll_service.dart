@@ -7,129 +7,9 @@ import '../erp/js_compat.dart';
 import '../erp/normalize.dart';
 import '../erp/payroll_audit_engine.dart';
 import '../google/sheets_client.dart';
+import 'payroll_models.dart';
 
-typedef Progress = void Function(String message);
-
-/// Where the user-info table ("جدول معلومات المستخدمين") comes from.
-sealed class UserInfoSource {
-  const UserInfoSource();
-}
-
-class GoogleUserInfo extends UserInfoSource {
-  const GoogleUserInfo(this.spreadsheetId, this.sheetName);
-  final String spreadsheetId;
-
-  /// Empty → first sheet (ERP «أول ورقة»).
-  final String? sheetName;
-}
-
-class LocalUserInfo extends UserInfoSource {
-  const LocalUserInfo(this.fileName, this.sheetName, this.rows);
-  final String fileName;
-  final String sheetName;
-  final Rows rows;
-}
-
-class PayrollRequest {
-  const PayrollRequest({
-    required this.cycleId,
-    required this.userInfo,
-    required this.discountRate,
-    required this.agentColor,
-    required this.managementColor,
-    required this.columns,
-    this.userInfoStatusCol,
-    this.forceReaudit = false,
-  });
-
-  final int cycleId;
-  final UserInfoSource userInfo;
-
-  /// `null` → saved settings (ERP `resolvePayrollDiscountRatePct`).
-  final double? discountRate;
-  final String agentColor;
-  final String managementColor;
-  final AuditColumns columns;
-  final String? userInfoStatusCol;
-  final bool forceReaudit;
-}
-
-class SampleCheck {
-  const SampleCheck(this.userId, this.inMgmt, this.inAgent);
-  final String userId;
-  final bool inMgmt;
-  final bool inAgent;
-}
-
-class PayrollDiagnostic {
-  const PayrollDiagnostic({
-    required this.managementUniqueCount,
-    required this.agentUniqueCount,
-    required this.userInfoUniqueCount,
-    required this.sampleCheck,
-  });
-  final int managementUniqueCount;
-  final int agentUniqueCount;
-  final int userInfoUniqueCount;
-  final List<SampleCheck> sampleCheck;
-}
-
-class PayrollResult {
-  PayrollResult({
-    required this.success,
-    required this.message,
-    this.code,
-    this.summary,
-    this.applied = false,
-    this.cycleSynced = false,
-    this.localOnly = false,
-    this.spreadsheetUrl,
-    this.results = const [],
-    this.sampleUserIds = const [],
-    this.sampleMgmtIds = const [],
-    this.sampleAgentIds = const [],
-    this.diagnostic,
-    this.duplicateRowNumbers = const [],
-  });
-
-  factory PayrollResult.fail(
-    String message, {
-    String? code,
-    String? url,
-    List<int> rows = const [],
-  }) => PayrollResult(
-    success: false,
-    message: message,
-    code: code,
-    spreadsheetUrl: url,
-    duplicateRowNumbers: rows,
-  );
-
-  final bool success;
-  final String message;
-  final String? code;
-  final AuditSummary? summary;
-  final bool applied;
-  final bool cycleSynced;
-  final bool localOnly;
-  final String? spreadsheetUrl;
-  final List<AuditResultRow> results;
-  final List<String> sampleUserIds;
-  final List<String> sampleMgmtIds;
-  final List<String> sampleAgentIds;
-  final PayrollDiagnostic? diagnostic;
-  final List<int> duplicateRowNumbers;
-
-  bool get unchanged => code == 'USER_INFO_UNCHANGED';
-
-  Map<String, Object?> toLog() => {
-    'success': success,
-    'message': message,
-    'summary': summary?.toJson(),
-    'localOnly': localOnly,
-    'spreadsheetUrl': spreadsheetUrl,
-  };
-}
+export 'payroll_models.dart';
 
 /// ERP `hashUserInfoRows`.
 String hashUserInfoRows(Rows rows) =>
@@ -141,10 +21,29 @@ double resolveDiscount(double? requested, PayrollSettings settings) {
   return requested;
 }
 
+/// Result of preparing a Google audit: either the plan of writes or a
+/// failure that stops the audit (as ERP's response with success: false).
+class PreparedAudit {
+  const PreparedAudit.plan(AuditPlan this.plan) : failure = null;
+  const PreparedAudit.fail(PayrollResult this.failure) : plan = null;
+  final AuditPlan? plan;
+  final PayrollResult? failure;
+}
+
 /// The bulk audit — a port of ERP `POST /api/sheet/payroll-execute`
-/// running on the phone. Accounting side effects of ERP (sub-agency sync,
-/// cash box, deferred salaries, profit ledger) are ERP-database features
-/// and are not part of the audit app.
+/// running on the phone.
+///
+/// The Google audit is split in two: [prepareGoogle] reads and computes
+/// exactly like ERP and returns the list of writes; [runStep] performs one
+/// write and may be repeated safely (copies re-check the target sheet, the
+/// other writes overwrite the same cells), so an interrupted audit resumes
+/// from the first unfinished step. Accounting side effects of ERP are not
+/// part of the audit app (owner's decision).
+///
+/// Owner's request (2026-11-17), different from ERP: a duplicated id in
+/// the user-info sheet no longer stops the audit. Its first row is audited
+/// normally, the other rows are not copied again and get «مكرر (الصف N)»,
+/// and every duplicate (id + rows) is reported.
 class PayrollService {
   PayrollService(this.db, this.sheetsProvider);
 
@@ -153,15 +52,24 @@ class PayrollService {
   /// Returns the Google client, or throws when the account is not connected.
   final SheetsApi Function() sheetsProvider;
 
+  /// Runs the whole audit in this isolate (local files, tests). The app
+  /// runs Google audits as background jobs (see `AuditJobRunner`).
   Future<PayrollResult> execute(
     PayrollRequest req, {
     Progress? onProgress,
   }) async {
+    final progress = onProgress ?? (_) {};
     try {
-      return switch (req.userInfo) {
-        GoogleUserInfo g => await _executeGoogle(req, g, onProgress ?? (_) {}),
-        LocalUserInfo l => await _executeLocal(req, l, onProgress ?? (_) {}),
-      };
+      final ui = req.userInfo;
+      if (ui is LocalUserInfo) return await _executeLocal(req, ui, progress);
+      final prepared = await prepareGoogle(req, progress);
+      final plan = prepared.plan;
+      if (plan == null) return prepared.failure!;
+      while (!plan.complete) {
+        await runStep(plan, plan.next, progress);
+        plan.next++;
+      }
+      return plan.result;
     } on SheetsApiException catch (e) {
       return PayrollResult.fail(e.message);
     } catch (e) {
@@ -172,18 +80,22 @@ class PayrollService {
   }
 
   // ======================================================================
-  // Google mode (identical to ERP payroll-execute)
+  // Google mode: reads and decisions identical to ERP payroll-execute
   // ======================================================================
 
-  Future<PayrollResult> _executeGoogle(
+  Future<PreparedAudit> prepareGoogle(
     PayrollRequest req,
-    GoogleUserInfo ui,
     Progress progress,
   ) async {
+    final ui = req.userInfo as GoogleUserInfo;
     final settings = await db.getPayrollSettings();
     final discountRatePct = resolveDiscount(req.discountRate, settings);
     final cycle = await db.getCycle(req.cycleId);
-    if (cycle == null) return PayrollResult.fail('الدورة المالية غير موجودة');
+    if (cycle == null) {
+      return PreparedAudit.fail(
+        PayrollResult.fail('الدورة المالية غير موجودة'),
+      );
+    }
 
     final sheets = sheetsProvider();
     var managementRows = cycle.managementRows;
@@ -217,9 +129,11 @@ class PayrollService {
           'agent_sheet_name': agentResult.sheetTitleUsed ?? agentSheetNameCycle,
         });
         cycleSynced = true;
-      } catch (_) {
-        // ERP continues with the saved snapshots when the sync fails.
-      }
+      } on SheetsApiException catch (e) {
+        // ERP continues with the saved snapshots when the sync fails; a
+        // lost connection is retried by the job instead.
+        if (e.transient) rethrow;
+      } catch (_) {}
     }
 
     progress('1/2 قراءة جدول معلومات المستخدمين...');
@@ -238,26 +152,16 @@ class PayrollService {
     );
     final spreadsheetUrl = meta.url;
 
-    final dupCheck = findDuplicateUserInfoMemberIds(
-      allRows,
-      req.columns.userInfoUserIdCol,
-    );
-    if (dupCheck.duplicateIds.isNotEmpty) {
-      return PayrollResult.fail(
-        _duplicateMessage(dupCheck.duplicateRowNumbers),
-        code: 'USER_INFO_DUPLICATE_IDS',
-        url: spreadsheetUrl,
-        rows: dupCheck.duplicateRowNumbers,
-      );
-    }
     final userInfoHash = hashUserInfoRows(allRows);
     if (cycle.userInfoHash != null &&
         cycle.userInfoHash == userInfoHash &&
         !req.forceReaudit) {
-      return PayrollResult.fail(
-        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة.',
-        code: 'USER_INFO_UNCHANGED',
-        url: spreadsheetUrl,
+      return PreparedAudit.fail(
+        PayrollResult.fail(
+          'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة.',
+          code: 'USER_INFO_UNCHANGED',
+          url: spreadsheetUrl,
+        ),
       );
     }
 
@@ -270,47 +174,19 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
     );
-    final cycleMgmtCol = out.cycleMgmtCol;
-
-    var cycleMgmtSsId = mgmtSsId;
-    var cycleAgentSsId = agentSsId;
-    var cycleMgmtSheetName = mgmtSheetName;
-    var cycleAgentSheetName = agentSheetNameCycle;
-
-    progress('2/2 تطبيق النتائج على Google...');
-    // A cycle built from uploaded files gets its own Google spreadsheet,
-    // exactly like ERP.
-    if (cycleMgmtSsId == null || cycleAgentSsId == null) {
-      final cycleName = cycle.name.trim().isEmpty ? 'دورة' : cycle.name.trim();
-      final dateStr = DateTime.now().toIso8601String().substring(0, 10);
-      final newId = await withSheetsRetry(
-        () => sheets.createSpreadsheet('دورة $cycleName - $dateStr', const [
-          'الإدارة',
-          'الوكيل',
-        ]),
+    final duplicates = findDuplicateGroups(out);
+    if (duplicates.isNotEmpty) {
+      progress(
+        '1/2 تم العثور على ${duplicates.length} رقم مكرر في جدول معلومات المستخدمين — يُدقق أول صف لكل رقم فقط',
       );
-      await withSheetsRetry(
-        () => sheets.valuesUpdate(newId, "'الإدارة'!A1", managementRows),
-      );
-      await withSheetsRetry(
-        () => sheets.valuesUpdate(newId, "'الوكيل'!A1", agentRows),
-      );
-      await db.updateCycle(cycle.id, {
-        'management_spreadsheet_id': newId,
-        'management_sheet_name': 'الإدارة',
-        'agent_spreadsheet_id': newId,
-        'agent_sheet_name': 'الوكيل',
-      });
-      cycleMgmtSsId = newId;
-      cycleAgentSsId = newId;
-      cycleMgmtSheetName = 'الإدارة';
-      cycleAgentSheetName = 'الوكيل';
     }
+    final skipped = {for (final d in duplicates) ...d.skippedRows};
+    final grouped = groupByTitle(out, skipped);
 
     // Target sheet names from the title column (ERP column D).
     final titleToSheetName = <String, String>{};
     final usedNames = <String>{};
-    for (final title in out.titleOrder) {
+    for (final title in grouped.order) {
       var st = safeSheetTitle(title);
       while (usedNames.contains(st)) {
         st = '${st}_${usedNames.length}';
@@ -318,198 +194,322 @@ class PayrollService {
       usedNames.add(st);
       titleToSheetName[title] = st;
     }
-    var sheetNamesOrdered =
-        out.titleOrder.map((t) => titleToSheetName[t]!).toList();
-    final sheetIdByName = <String, int>{};
-    var existingMgmtSheetTitles = <String>[];
+    final seenLower = <String>{};
+    final sheetNamesOrdered = [
+      for (final t in grouped.order)
+        if (seenLower.add(titleToSheetName[t]!.toLowerCase()))
+          titleToSheetName[t]!,
+    ];
+
+    final steps = <Map<String, Object?>>[];
+    if (mgmtSsId == null || agentSsId == null) {
+      // ERP creates a spreadsheet for a cycle built from uploaded files
+      // (the app's audit button only reaches this for linked cycles).
+      steps.add({'k': 'createCycleSpreadsheet', 'name': cycle.name});
+    }
     if (sheetNamesOrdered.isNotEmpty) {
-      try {
-        final metaMgmt = await withSheetsRetry(
-          () => sheets.getSpreadsheet(cycleMgmtSsId!),
-        );
-        existingMgmtSheetTitles = [for (final s in metaMgmt.sheets) s.title];
-        for (final st in sheetNamesOrdered) {
-          for (final s in metaMgmt.sheets) {
-            if (s.title == st) sheetIdByName[st] = s.sheetId;
-          }
-        }
-        final seenLower = <String>{};
-        sheetNamesOrdered = [
-          for (final n in sheetNamesOrdered)
-            if (seenLower.add(n.toLowerCase())) n,
-        ];
-      } catch (e) {
-        throw Exception(
-          'لا يمكن الوصول إلى جدول الإدارة (الدورة). تأكد أن الدورة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
-        );
-      }
+      steps.add({'k': 'addSheets', 'names': sheetNamesOrdered});
     }
-    final existingLower =
-        existingMgmtSheetTitles.map((t) => t.toLowerCase()).toSet();
-    final toCreate = <String>[];
-    final toCreateLower = <String>{};
-    for (final st in sheetNamesOrdered) {
-      final lower = st.toLowerCase();
-      if (existingLower.contains(lower) || !toCreateLower.add(lower)) continue;
-      toCreate.add(st);
-    }
-    if (toCreate.isNotEmpty) {
-      progress('2/2 إنشاء ${toCreate.length} ورقة في جدول الإدارة...');
-      final replies = await withSheetsRetry(
-        () => sheets.batchUpdate(cycleMgmtSsId!, [
-          for (final st in toCreate)
-            {
-              'addSheet': {
-                'properties': {'title': st},
-              },
-            },
-        ]),
-      );
-      for (var i = 0; i < replies.length && i < toCreate.length; i++) {
-        final props = (replies[i]['addSheet'] as Map?)?['properties'] as Map?;
-        if (props != null && props['sheetId'] is num) {
-          sheetIdByName[toCreate[i]] = (props['sheetId'] as num).toInt();
-        }
-      }
-    }
-
     final auditedMemberIds = await db.auditedMemberIds(cycle.id);
-    var sheetIter = 0;
-    for (final title in out.titleOrder) {
-      if (sheetIter > 0) await sleepMs(1200);
-      sheetIter++;
-      final sheetName = titleToSheetName[title]!;
-      final items = out.byTitle[title] ?? const <TitleItem>[];
-      if (items.isEmpty) continue;
-      final sheetExisted = existingMgmtSheetTitles.contains(sheetName);
-
-      final existingInSheetIds = <String>{};
-      if (sheetExisted) {
-        try {
-          final sheetRows = await withSheetsRetry(
-            () => sheets.valuesGet(cycleMgmtSsId!, rangeWholeSheet(sheetName)),
-          );
-          for (var idx = 0; idx < sheetRows.length; idx++) {
-            final row = sheetRows[idx];
-            if (idx == 0 && isHeaderRowGeneric(row, cycleMgmtCol)) continue;
-            final id = normalizeUserId(cellAt(row, cycleMgmtCol));
-            if (id.isNotEmpty) existingInSheetIds.add(id);
-          }
-        } catch (_) {}
-      }
+    final cycleMgmtCol = out.cycleMgmtCol;
+    for (final title in grouped.order) {
+      final items = grouped.byTitle[title]!;
       final seenInBatch = <String>{};
-      final itemsToPaste =
-          items.where((it) {
-            final id = normalizeUserId(cellAt(it.managementRow, cycleMgmtCol));
-            if (id.isEmpty ||
-                existingInSheetIds.contains(id) ||
-                auditedMemberIds.contains(id)) {
-              return false;
-            }
-            return seenInBatch.add(id);
-          }).toList();
-      if (itemsToPaste.isEmpty) continue;
-      progress('2/2 نسخ ${itemsToPaste.length} صف إلى ورقة «$sheetName»...');
-      final values = [for (final it in itemsToPaste) it.managementRow];
-      try {
-        if (sheetExisted) {
-          await withSheetsRetry(
-            () => sheets.valuesAppend(
-              cycleMgmtSsId!,
-              rangeWholeSheet(sheetName),
-              values,
-            ),
-          );
-        } else {
-          await withSheetsRetry(
-            () => sheets.valuesUpdate(
-              cycleMgmtSsId!,
-              "'${escapeSheetTitleForRange(sheetName)}'!A1",
-              values,
-            ),
-          );
-        }
-      } catch (e) {
-        throw Exception(
-          'فشل نسخ الصفوف إلى ورقة «$sheetName» في جدول الإدارة: $e',
-        );
+      final rows = <List<String>>[];
+      for (final it in items) {
+        final id = normalizeUserId(cellAt(it.managementRow, cycleMgmtCol));
+        if (id.isEmpty || auditedMemberIds.contains(id)) continue;
+        if (!seenInBatch.add(id)) continue;
+        rows.add(it.managementRow);
       }
+      if (rows.isEmpty) continue;
+      steps.add({
+        'k': 'copy',
+        'sheet': titleToSheetName[title],
+        'idCol': cycleMgmtCol,
+        'rows': rows,
+      });
     }
 
-    // Salary column and the aligned status column in the user-info sheet.
-    final writes = _salaryStatusColumns(req, out);
+    final writes = salaryStatusColumns(req, out, duplicates);
     if (writes.salaryValues.isNotEmpty) {
-      progress('2/2 كتابة الراتب والحالة في جدول معلومات المستخدمين...');
       final t = escapeSheetTitleForRange(mainSheetTitle);
-      await withSheetsRetry(
-        () => sheets.valuesUpdate(
-          spreadsheetId,
-          "'$t'!${writes.salaryColLetter}${writes.minRow}:${writes.salaryColLetter}${writes.maxRow}",
-          writes.salaryValues,
-        ),
-      );
-      await withSheetsRetry(
-        () => sheets.valuesUpdate(
-          spreadsheetId,
-          "'$t'!${writes.statusColLetter}${writes.minRow}:${writes.statusColLetter}${writes.maxRow}",
-          writes.statusValues,
-        ),
-      );
+      steps.add({
+        'k': 'values',
+        'what': 'الراتب',
+        'ss': spreadsheetId,
+        'range':
+            "'$t'!${writes.salaryColLetter}${writes.minRow}:${writes.salaryColLetter}${writes.maxRow}",
+        'values': writes.salaryValues,
+      });
+      steps.add({
+        'k': 'values',
+        'what': 'الحالة',
+        'ss': spreadsheetId,
+        'range':
+            "'$t'!${writes.statusColLetter}${writes.minRow}:${writes.statusColLetter}${writes.maxRow}",
+        'values': writes.statusValues,
+      });
     }
-
-    // Color the original management and agent rows.
-    final colors = _sourceColors(out);
+    final colors = sourceColors(out);
     if (colors.mgmt.isNotEmpty) {
-      final metaMgmt = await withSheetsRetry(
-        () => sheets.getSpreadsheet(cycleMgmtSsId!),
-      );
-      final mgmtSheetId = getSheetIdByTitle(metaMgmt, cycleMgmtSheetName);
-      if (mgmtSheetId != null) {
-        await batchUpdateRequestsInChunks(
-          sheets,
-          cycleMgmtSsId,
-          _colorRequests(
-            mgmtSheetId,
-            colors.mgmt,
-            colorEndColumn(metaMgmt, mgmtSheetId),
-          ),
-          onProgress: (d, t) => progress('2/2 تلوين صفوف الإدارة ($d/$t)...'),
-        );
-      }
+      steps.add({
+        'k': 'color',
+        'sheetOf': 'management',
+        'rows': {for (final e in colors.mgmt.entries) '${e.key}': e.value},
+      });
     }
     if (colors.agent.isNotEmpty) {
-      final metaAgent = await withSheetsRetry(
-        () => sheets.getSpreadsheet(cycleAgentSsId!),
-      );
-      final agentSheetId = getSheetIdByTitle(metaAgent, cycleAgentSheetName);
-      if (agentSheetId != null) {
-        await batchUpdateRequestsInChunks(
-          sheets,
-          cycleAgentSsId,
-          _colorRequests(
-            agentSheetId,
-            colors.agent,
-            colorEndColumn(metaAgent, agentSheetId),
-          ),
-          onProgress: (d, t) => progress('2/2 تلوين صفوف الوكيل ($d/$t)...'),
-        );
-      }
+      steps.add({
+        'k': 'color',
+        'sheetOf': 'agent',
+        'rows': {for (final e in colors.agent.entries) '${e.key}': e.value},
+      });
     }
+    steps.add({'k': 'finish'});
 
-    final result = await _finish(
-      cycle: cycle,
+    final summary = buildResult(
       out: out,
-      managementRows: managementRows,
-      agentRows: agentRows,
-      cycleMgmtSheetName: cycleMgmtSheetName,
-      cycleAgentSheetName: cycleAgentSheetName,
-      userInfoHash: userInfoHash,
       spreadsheetUrl: spreadsheetUrl,
       cycleSynced: cycleSynced,
       localOnly: false,
+      duplicates: duplicates,
     );
-    await db.addAuditRun(cycle.id, 'google', result.toLog());
-    return result;
+    return PreparedAudit.plan(
+      AuditPlan(
+        cycleId: cycle.id,
+        steps: steps,
+        next: 0,
+        result: summary,
+        finish: finishData(out, userInfoHash),
+      ),
+    );
+  }
+
+  /// Human-readable label of a step, for the progress line.
+  static String describeStep(Map<String, Object?> step) {
+    switch (step['k']) {
+      case 'createCycleSpreadsheet':
+        return '2/2 إنشاء جدول Google للدورة...';
+      case 'addSheets':
+        return '2/2 إنشاء أوراق الوجهة في جدول الإدارة...';
+      case 'copy':
+        final n = (step['rows'] as List).length;
+        return '2/2 نسخ $n صف إلى ورقة «${step['sheet']}»...';
+      case 'values':
+        return '2/2 كتابة ${step['what']} في جدول معلومات المستخدمين...';
+      case 'color':
+        final n = (step['rows'] as Map).length;
+        return step['sheetOf'] == 'management'
+            ? '2/2 تلوين $n صف في ورقة الإدارة...'
+            : '2/2 تلوين $n صف في ورقة الوكيل...';
+      case 'finish':
+        return '2/2 حفظ النتائج...';
+    }
+    return '2/2 تطبيق...';
+  }
+
+  /// Performs step [index] of [plan]. Safe to repeat after an interruption.
+  Future<void> runStep(AuditPlan plan, int index, Progress progress) async {
+    final step = plan.steps[index];
+    progress(describeStep(step));
+    final kind = step['k'];
+    if (kind == 'finish') {
+      await _finishPlan(plan);
+      return;
+    }
+    final cycle = await db.getCycle(plan.cycleId);
+    if (cycle == null) throw Exception('الدورة المالية غير موجودة');
+    final sheets = sheetsProvider();
+    switch (kind) {
+      case 'createCycleSpreadsheet':
+        if (cycle.linkedToGoogle) return; // already done before a restart
+        final cycleName =
+            cycle.name.trim().isEmpty ? 'دورة' : cycle.name.trim();
+        final dateStr = DateTime.now().toIso8601String().substring(0, 10);
+        final newId = await withSheetsRetry(
+          () => sheets.createSpreadsheet('دورة $cycleName - $dateStr', const [
+            'الإدارة',
+            'الوكيل',
+          ]),
+        );
+        await withSheetsRetry(
+          () =>
+              sheets.valuesUpdate(newId, "'الإدارة'!A1", cycle.managementRows),
+        );
+        await withSheetsRetry(
+          () => sheets.valuesUpdate(newId, "'الوكيل'!A1", cycle.agentRows),
+        );
+        await db.updateCycle(cycle.id, {
+          'management_spreadsheet_id': newId,
+          'management_sheet_name': 'الإدارة',
+          'agent_spreadsheet_id': newId,
+          'agent_sheet_name': 'الوكيل',
+        });
+      case 'addSheets':
+        final mgmtSsId = cycle.managementSpreadsheetId!;
+        SpreadsheetMeta meta;
+        try {
+          meta = await withSheetsRetry(() => sheets.getSpreadsheet(mgmtSsId));
+        } on SheetsApiException catch (e) {
+          if (e.transient) rethrow;
+          throw Exception(
+            'لا يمكن الوصول إلى جدول الإدارة (الدورة). تأكد أن الدورة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
+          );
+        }
+        final existing = {for (final s in meta.sheets) s.title.toLowerCase()};
+        final toCreate = [
+          for (final n in (step['names'] as List).cast<String>())
+            if (!existing.contains(n.toLowerCase())) n,
+        ];
+        if (toCreate.isEmpty) return;
+        await withSheetsRetry(
+          () => sheets.batchUpdate(mgmtSsId, [
+            for (final st in toCreate)
+              {
+                'addSheet': {
+                  'properties': {'title': st},
+                },
+              },
+          ]),
+        );
+      case 'copy':
+        await _copyStep(cycle, step, index, plan);
+      case 'values':
+        await withSheetsRetry(
+          () => sheets.valuesUpdate(
+            step['ss'] as String,
+            step['range'] as String,
+            [
+              for (final r in (step['values'] as List))
+                List<Object?>.from(r as List),
+            ],
+          ),
+        );
+      case 'color':
+        final isMgmt = step['sheetOf'] == 'management';
+        final ssId =
+            isMgmt ? cycle.managementSpreadsheetId : cycle.agentSpreadsheetId;
+        if (ssId == null) return;
+        final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ssId));
+        final sheetId = getSheetIdByTitle(
+          meta,
+          isMgmt ? cycle.managementSheetName : cycle.agentSheetName,
+        );
+        if (sheetId == null) return;
+        final byRow = {
+          for (final e in (step['rows'] as Map).entries)
+            int.parse(e.key.toString()): e.value.toString(),
+        };
+        // Owner's request: one request per sheet instead of ERP's batches
+        // of 8 every 1.5 s; consecutive rows of one colour form one range.
+        final requests = mergedColorRequests(
+          sheetId,
+          byRow,
+          colorEndColumn(meta, sheetId),
+        );
+        for (var i = 0; i < requests.length; i += colorBatchSize) {
+          final chunk = requests.sublist(
+            i,
+            i + colorBatchSize > requests.length
+                ? requests.length
+                : i + colorBatchSize,
+          );
+          await withSheetsRetry(() => sheets.batchUpdate(ssId, chunk));
+        }
+    }
+  }
+
+  static const colorBatchSize = 5000;
+
+  /// Copies rows to one target sheet. The target is read first, so an id
+  /// already there (earlier run, manual paste, or a copy whose reply was
+  /// lost) is never written twice.
+  Future<void> _copyStep(
+    Cycle cycle,
+    Map<String, Object?> step,
+    int index,
+    AuditPlan plan,
+  ) async {
+    final sheets = sheetsProvider();
+    final mgmtSsId = cycle.managementSpreadsheetId!;
+    final sheetName = step['sheet'] as String;
+    final idCol = (step['idCol'] as num).toInt();
+    // ERP waits 1.2 s between target sheets to stay under Google quotas.
+    if (index > 0 && plan.steps[index - 1]['k'] == 'copy') {
+      await sleepMs(1200);
+    }
+    final sheetRows = await withSheetsRetry(
+      () => sheets.valuesGet(mgmtSsId, rangeWholeSheet(sheetName)),
+    );
+    final existing = <String>{};
+    for (var idx = 0; idx < sheetRows.length; idx++) {
+      final row = sheetRows[idx];
+      if (idx == 0 && isHeaderRowGeneric(row, idCol)) continue;
+      final id = normalizeUserId(cellAt(row, idCol));
+      if (id.isNotEmpty) existing.add(id);
+    }
+    final values = <List<Object?>>[
+      for (final r in (step['rows'] as List))
+        if (!existing.contains(normalizeUserId(cellAt(_strings(r), idCol))))
+          List<Object?>.from(r as List),
+    ];
+    if (values.isEmpty) return;
+    try {
+      if (sheetRows.isNotEmpty) {
+        await withSheetsRetry(
+          () =>
+              sheets.valuesAppend(mgmtSsId, rangeWholeSheet(sheetName), values),
+        );
+      } else {
+        await withSheetsRetry(
+          () => sheets.valuesUpdate(
+            mgmtSsId,
+            "'${escapeSheetTitleForRange(sheetName)}'!A1",
+            values,
+          ),
+        );
+      }
+    } on SheetsApiException catch (e) {
+      if (e.transient) rethrow;
+      throw Exception(
+        'فشل نسخ الصفوف إلى ورقة «$sheetName» في جدول الإدارة: $e',
+      );
+    }
+  }
+
+  static List<String> _strings(Object? r) => [
+    for (final c in (r as List)) c?.toString() ?? '',
+  ];
+
+  Future<void> _finishPlan(AuditPlan plan) async {
+    final cycle = await db.getCycle(plan.cycleId);
+    if (cycle == null) return;
+    final f = plan.finish;
+    final entries = [
+      for (final e in (f['entries'] as List))
+        AuditEntry(
+          (e as Map)['id'].toString(),
+          'مدقق',
+          e['source'] as String?,
+          Map<String, Object?>.from(e['details'] as Map),
+        ),
+    ];
+    await db.saveUserAuditStatuses(cycle.id, entries);
+    await db.saveCycleCache(
+      cycle.id,
+      CycleCache(
+        managementData: cycle.managementRows,
+        agentData: cycle.agentRows,
+        managementSheetName: cycle.managementSheetName,
+        agentSheetName: cycle.agentSheetName,
+        auditedAgentIds: {for (final x in (f['agent'] as List)) x.toString()},
+        auditedMgmtIds: {for (final x in (f['mgmt'] as List)) x.toString()},
+        foundInTargetSheetIds: <String>{},
+      ),
+    );
+    await db.updateCycle(cycle.id, {'payroll_audit_user_info_hash': f['hash']});
+    await db.addAuditRun(cycle.id, 'google', plan.result.toLog());
   }
 
   // ======================================================================
@@ -537,17 +537,6 @@ class PayrollService {
     }
     progress('تدقيق على الهاتف...');
     final allRows = ui.rows;
-    final dupCheck = findDuplicateUserInfoMemberIds(
-      allRows,
-      req.columns.userInfoUserIdCol,
-    );
-    if (dupCheck.duplicateIds.isNotEmpty) {
-      return PayrollResult.fail(
-        _duplicateMessage(dupCheck.duplicateRowNumbers),
-        code: 'USER_INFO_DUPLICATE_IDS',
-        rows: dupCheck.duplicateRowNumbers,
-      );
-    }
     final userInfoHash = hashUserInfoRows(allRows);
     if (cycle.userInfoHash != null &&
         cycle.userInfoHash == userInfoHash &&
@@ -566,6 +555,9 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
     );
+    final duplicates = findDuplicateGroups(out);
+    final skipped = {for (final d in duplicates) ...d.skippedRows};
+    final grouped = groupByTitle(out, skipped);
 
     final book = LocalWorkbookState.fromJson(
       await db.getLocalWorkbook(cycle.id),
@@ -575,7 +567,7 @@ class PayrollService {
     // Same naming and de-duplication rules as the Google target sheets.
     final titleToSheetName = <String, String>{};
     final usedNames = <String>{};
-    for (final title in out.titleOrder) {
+    for (final title in grouped.order) {
       var st = safeSheetTitle(title);
       while (usedNames.contains(st)) {
         st = '${st}_${usedNames.length}';
@@ -587,10 +579,9 @@ class PayrollService {
       for (final k in book.targets.keys) k.toLowerCase(): k,
     };
     final auditedMemberIds = await db.auditedMemberIds(cycle.id);
-    for (final title in out.titleOrder) {
+    for (final title in grouped.order) {
       var sheetName = titleToSheetName[title]!;
-      final items = out.byTitle[title] ?? const <TitleItem>[];
-      if (items.isEmpty) continue;
+      final items = grouped.byTitle[title]!;
       sheetName = existingLower[sheetName.toLowerCase()] ?? sheetName;
       final target = book.targets.putIfAbsent(sheetName, () => <TargetRow>[]);
       existingLower[sheetName.toLowerCase()] = sheetName;
@@ -615,7 +606,7 @@ class PayrollService {
       }
     }
 
-    final writes = _salaryStatusColumns(req, out);
+    final writes = salaryStatusColumns(req, out, duplicates);
     final userInfoOut = [
       for (final r in allRows) <Object?>[...r],
     ];
@@ -633,23 +624,50 @@ class PayrollService {
     book.userInfoSheetName = ui.sheetName;
     book.userInfoRows = userInfoOut;
 
-    final colors = _sourceColors(out);
+    final colors = sourceColors(out);
     book.mgmtColors.addAll(colors.mgmt);
     book.agentColors.addAll(colors.agent);
     await db.saveLocalWorkbook(cycle.id, book.toJson());
 
-    final result = await _finish(
-      cycle: cycle,
+    final result = buildResult(
       out: out,
-      managementRows: managementRows,
-      agentRows: agentRows,
-      cycleMgmtSheetName: cycle.managementSheetName,
-      cycleAgentSheetName: cycle.agentSheetName,
-      userInfoHash: userInfoHash,
       spreadsheetUrl: null,
       cycleSynced: false,
       localOnly: true,
+      duplicates: duplicates,
     );
+    final plan = AuditPlan(
+      cycleId: cycle.id,
+      steps: const [],
+      next: 0,
+      result: result,
+      finish: finishData(out, userInfoHash),
+    );
+    final f = plan.finish;
+    await db.saveUserAuditStatuses(cycle.id, [
+      for (final e in (f['entries'] as List))
+        AuditEntry(
+          (e as Map)['id'].toString(),
+          'مدقق',
+          e['source'] as String?,
+          Map<String, Object?>.from(e['details'] as Map),
+        ),
+    ]);
+    await db.saveCycleCache(
+      cycle.id,
+      CycleCache(
+        managementData: managementRows,
+        agentData: agentRows,
+        managementSheetName: cycle.managementSheetName,
+        agentSheetName: cycle.agentSheetName,
+        auditedAgentIds: {for (final x in (f['agent'] as List)) x.toString()},
+        auditedMgmtIds: {for (final x in (f['mgmt'] as List)) x.toString()},
+        foundInTargetSheetIds: <String>{},
+      ),
+    );
+    await db.updateCycle(cycle.id, {
+      'payroll_audit_user_info_hash': userInfoHash,
+    });
     await db.addAuditRun(cycle.id, 'local', result.toLog());
     return result;
   }
@@ -658,10 +676,6 @@ class PayrollService {
   // Shared
   // ======================================================================
 
-  static String _duplicateMessage(List<int> rows) =>
-      'جدول معلومات المستخدمين يحتوي رقم مستخدم مكرراً في عمود المعرف. أزل التكرار (صفوف: '
-      '${rows.take(20).join(', ')}${rows.length > 20 ? '…' : ''}).';
-
   static void _setCell(List<Object?> row, int idx, Object? value) {
     while (row.length <= idx) {
       row.add('');
@@ -669,7 +683,52 @@ class PayrollService {
     row[idx] = value;
   }
 
-  _ColumnWrites _salaryStatusColumns(PayrollRequest req, AuditCoreOutput out) {
+  /// Ids that appear on more than one data row of the user-info sheet.
+  static List<DuplicateGroup> findDuplicateGroups(AuditCoreOutput out) {
+    final rowsById = <String, List<int>>{};
+    for (final r in out.results) {
+      if (r.userId.isEmpty) continue;
+      rowsById.putIfAbsent(r.userId, () => <int>[]).add(r.rowIndex);
+    }
+    return [
+      for (final e in rowsById.entries)
+        if (e.value.length > 1) DuplicateGroup(e.key, e.value),
+    ];
+  }
+
+  /// ERP's `byTitle` grouping, leaving out the repeated rows of duplicated
+  /// ids so each user is copied once. Without duplicates this is exactly
+  /// `out.byTitle` / `out.titleOrder`.
+  static ({Map<String, List<TitleItem>> byTitle, List<String> order})
+  groupByTitle(AuditCoreOutput out, Set<int> skippedRows) {
+    final byTitle = <String, List<TitleItem>>{};
+    final insertion = <String>[];
+    for (final r in out.results) {
+      if (skippedRows.contains(r.rowIndex)) continue;
+      final row = r.managementRow;
+      if (row == null || !(isAgentType(r.type) || r.type == typeManagement)) {
+        continue;
+      }
+      if (!byTitle.containsKey(r.title)) {
+        byTitle[r.title] = <TitleItem>[];
+        insertion.add(r.title);
+      }
+      byTitle[r.title]!.add(
+        TitleItem(
+          row,
+          isAgentType(r.type) ? out.agentColorVal : out.mgmtColorVal,
+          r.type,
+        ),
+      );
+    }
+    return (byTitle: byTitle, order: jsObjectKeyOrder(insertion));
+  }
+
+  ColumnWrites salaryStatusColumns(
+    PayrollRequest req,
+    AuditCoreOutput out, [
+    List<DuplicateGroup> duplicates = const [],
+  ]) {
     final salaryText = req.columns.userInfoSalaryCol.trim();
     final salaryColLetter =
         salaryText.isNotEmpty ? salaryText.toUpperCase() : 'L';
@@ -693,13 +752,21 @@ class PayrollService {
         byRowStatus[r.rowIndex] = typeNotFound;
       }
     }
+    // Repeated rows of a duplicated id: no salary (it belongs to the first
+    // row) and a status that points at the audited row.
+    for (final d in duplicates) {
+      for (final row in d.skippedRows) {
+        byRowSalary[row] = '';
+        byRowStatus[row] = 'مكرر (الصف ${d.firstRow})';
+      }
+    }
     final salaryValues = <List<Object?>>[];
     final statusValues = <List<Object?>>[];
     for (var r = minRow; r <= maxRow; r++) {
       salaryValues.add([byRowSalary.containsKey(r) ? byRowSalary[r] : '']);
       statusValues.add([byRowStatus[r] ?? '']);
     }
-    return _ColumnWrites(
+    return ColumnWrites(
       salaryColLetter: salaryColLetter,
       statusColLetter: statusColLetter,
       minRow: minRow,
@@ -712,7 +779,7 @@ class PayrollService {
   static num _num(double v) =>
       v == v.truncateToDouble() && v.abs() < 1e15 ? v.toInt() : v;
 
-  ({Map<int, String> mgmt, Map<int, String> agent}) _sourceColors(
+  static ({Map<int, String> mgmt, Map<int, String> agent}) sourceColors(
     AuditCoreOutput out,
   ) {
     final mgmt = <int, String>{};
@@ -732,30 +799,54 @@ class PayrollService {
     return (mgmt: mgmt, agent: agent);
   }
 
-  static List<Map<String, dynamic>> _colorRequests(
-    int sheetId,
-    Map<int, String> byRow,
-    int endColumn,
+  /// Statuses, search cache and hash saved when every write is done
+  /// (ERP saves them at the end of payroll-execute).
+  static Map<String, Object?> finishData(
+    AuditCoreOutput out,
+    String userInfoHash,
   ) {
-    final keys = byRow.keys.toList()..sort();
-    return [
-      for (final rowIdx in keys)
-        colorRowRequest(sheetId, rowIdx, byRow[rowIdx]!, endColumn: endColumn),
-    ];
+    final auditedAgent = <String>{};
+    final auditedMgmt = <String>{};
+    final entries = <Map<String, Object?>>[];
+    for (final r in out.results) {
+      if (isAgentType(r.type) && r.userId.isNotEmpty) {
+        auditedAgent.add(r.userId);
+      }
+      if (r.type == typeManagement && r.userId.isNotEmpty) {
+        auditedMgmt.add(r.userId);
+      }
+      if (r.userId.isNotEmpty &&
+          (isAgentType(r.type) || r.type == typeManagement)) {
+        entries.add({
+          'id': r.userId,
+          'source':
+              isAgentType(r.type)
+                  ? 'تدقيق وكيل من النظام'
+                  : 'تدقيق ادارة من النظام',
+          'details': {
+            'type': r.type,
+            'title': r.title,
+            'salaryAfterDiscount':
+                r.salaryValue == null ? '' : _num(r.salaryValue!),
+          },
+        });
+      }
+    }
+    return {
+      'entries': entries,
+      'agent': auditedAgent.toList(),
+      'mgmt': auditedMgmt.toList(),
+      'hash': userInfoHash,
+    };
   }
 
-  Future<PayrollResult> _finish({
-    required Cycle cycle,
+  PayrollResult buildResult({
     required AuditCoreOutput out,
-    required Rows managementRows,
-    required Rows agentRows,
-    required String? cycleMgmtSheetName,
-    required String? cycleAgentSheetName,
-    required String userInfoHash,
     required String? spreadsheetUrl,
     required bool cycleSynced,
     required bool localOnly,
-  }) async {
+    required List<DuplicateGroup> duplicates,
+  }) {
     final summary = out.summary;
     final appliedCount = summary.agent + summary.management;
     var message =
@@ -805,53 +896,6 @@ class PayrollService {
         ],
       );
     }
-
-    final auditedAgent = <String>{};
-    final auditedMgmt = <String>{};
-    final entries = <AuditEntry>[];
-    for (final r in out.results) {
-      if (isAgentType(r.type) && r.userId.isNotEmpty) {
-        auditedAgent.add(r.userId);
-      }
-      if (r.type == typeManagement && r.userId.isNotEmpty) {
-        auditedMgmt.add(r.userId);
-      }
-      if (r.userId.isNotEmpty &&
-          (isAgentType(r.type) || r.type == typeManagement)) {
-        entries.add(
-          AuditEntry(
-            r.userId,
-            'مدقق',
-            isAgentType(r.type)
-                ? 'تدقيق وكيل من النظام'
-                : 'تدقيق ادارة من النظام',
-            {
-              'type': r.type,
-              'title': r.title,
-              'salaryAfterDiscount':
-                  r.salaryValue == null ? '' : _num(r.salaryValue!),
-            },
-          ),
-        );
-      }
-    }
-    await db.saveUserAuditStatuses(cycle.id, entries);
-    await db.saveCycleCache(
-      cycle.id,
-      CycleCache(
-        managementData: managementRows,
-        agentData: agentRows,
-        managementSheetName: cycleMgmtSheetName,
-        agentSheetName: cycleAgentSheetName,
-        auditedAgentIds: auditedAgent,
-        auditedMgmtIds: auditedMgmt,
-        foundInTargetSheetIds: <String>{},
-      ),
-    );
-    await db.updateCycle(cycle.id, {
-      'payroll_audit_user_info_hash': userInfoHash,
-    });
-
     return PayrollResult(
       success: true,
       message: message,
@@ -865,6 +909,7 @@ class PayrollService {
       sampleMgmtIds: sampleMgmtIds,
       sampleAgentIds: sampleAgentIds,
       diagnostic: diagnostic,
+      duplicates: duplicates,
     );
   }
 }
@@ -874,12 +919,20 @@ Map<String, dynamic> colorRowRequest(
   int rowIdx,
   String color, {
   int endColumn = 200,
-}) => {
+}) => colorRangeRequest(sheetId, rowIdx, rowIdx + 1, color, endColumn);
+
+Map<String, dynamic> colorRangeRequest(
+  int sheetId,
+  int startRow,
+  int endRow,
+  String color,
+  int endColumn,
+) => {
   'repeatCell': {
     'range': {
       'sheetId': sheetId,
-      'startRowIndex': rowIdx,
-      'endRowIndex': rowIdx + 1,
+      'startRowIndex': startRow,
+      'endRowIndex': endRow,
       'startColumnIndex': 0,
       'endColumnIndex': endColumn,
     },
@@ -890,8 +943,33 @@ Map<String, dynamic> colorRowRequest(
   },
 };
 
-class _ColumnWrites {
-  const _ColumnWrites({
+/// Same colours as ERP's one-request-per-row list, with consecutive rows
+/// of the same colour merged into a single range.
+List<Map<String, dynamic>> mergedColorRequests(
+  int sheetId,
+  Map<int, String> byRow,
+  int endColumn,
+) {
+  final rows = byRow.keys.toList()..sort();
+  final out = <Map<String, dynamic>>[];
+  var i = 0;
+  while (i < rows.length) {
+    final start = rows[i];
+    final color = byRow[start]!;
+    var end = start + 1;
+    var j = i + 1;
+    while (j < rows.length && rows[j] == end && byRow[rows[j]] == color) {
+      end++;
+      j++;
+    }
+    out.add(colorRangeRequest(sheetId, start, end, color, endColumn));
+    i = j;
+  }
+  return out;
+}
+
+class ColumnWrites {
+  const ColumnWrites({
     required this.salaryColLetter,
     required this.statusColLetter,
     required this.minRow,

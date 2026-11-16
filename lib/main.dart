@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_services.dart';
+import 'background/audit_worker.dart';
 import 'ui/erp_theme.dart';
 import 'ui/shell.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initAuditWorker();
   runApp(const AuditApplication());
 }
 

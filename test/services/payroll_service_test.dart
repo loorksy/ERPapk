@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lork_audit_standalone/data/app_database.dart';
 import 'package:lork_audit_standalone/erp/payroll_audit_engine.dart';
+import 'package:lork_audit_standalone/services/audit_job_runner.dart';
 import 'package:lork_audit_standalone/services/cycle_service.dart';
 import 'package:lork_audit_standalone/services/cycle_sync_worker.dart';
 import 'package:lork_audit_standalone/services/payroll_service.dart';
@@ -241,4 +242,101 @@ void main() {
     final other = await search.searchUser(id, '1001', 0);
     expect(other.hits.single.auditStatus, 'غير مدقق');
   });
+
+  test(
+    'duplicated ids do not stop the audit, are copied once and reported',
+    () async {
+      final id = await linkedCycle();
+      fake.add('ui2', 'Sheet1', [
+        ...userInfo,
+        ['سارة', '0996', '1002', 'وكيل الجنوب'],
+        ['أحمد', '0997', '1001', 'وكيل الشمال'],
+      ]);
+      final r = await payroll.execute(
+        PayrollRequest(
+          cycleId: id,
+          userInfo: const GoogleUserInfo('ui2', null),
+          discountRate: 10,
+          agentColor: '#8b5cf6',
+          managementColor: '#facc15',
+          columns: const AuditColumns(),
+        ),
+      );
+      expect(r.success, isTrue, reason: r.message);
+      expect([for (final d in r.duplicates) d.userId], ['1001', '1002']);
+      expect(r.duplicates.first.rows, [2, 7]);
+      expect(r.duplicates.last.rows, [3, 6]);
+      // 1002 is copied once, to the sheet of its first row only.
+      expect(fake.books['cyc']!['وكيل الشمال']!.map((e) => e.first), [
+        'رقم المستخدم',
+        '1001',
+        '1002',
+      ]);
+      expect(fake.books['cyc']!['وكيل الجنوب'], [
+        ['1003', 'علي', 'الجنوب', '50'],
+      ]);
+      final ui = fake.books['ui2']!['Sheet1']!;
+      expect(ui[5][12], 'مكرر (الصف 3)');
+      expect(ui[6][12], 'مكرر (الصف 2)');
+      expect(ui[5][11], '');
+      expect(ui[2][11], '90');
+    },
+  );
+
+  test('colouring is one request per sheet with merged ranges', () async {
+    final id = await linkedCycle();
+    await payroll.execute(request(id));
+    final colourBatches = [
+      for (final l in fake.log)
+        if (l.startsWith('BATCH') && l.contains('repeatCell')) l,
+    ];
+    // management: rows 1-2 agent colour + row 3 management colour;
+    // agent: rows 1-3 in one range.
+    expect(colourBatches, [
+      'BATCH cyc 2 [repeatCell]',
+      'BATCH cyc 1 [repeatCell]',
+    ]);
+  });
+
+  test(
+    'an interrupted audit resumes where it stopped, without duplicates',
+    () async {
+      final id = await linkedCycle();
+      final runner = AuditJobRunner(
+        db,
+        payroll,
+        CycleService(db, () => fake),
+        retryDelays: const [],
+      );
+      final jobId = await db.createAuditJob(id, request(id).toJson());
+      var down = true;
+      fake.failWhen =
+          (op, payload) =>
+              down &&
+              op == 'batchUpdate' &&
+              (payload as List).first.containsKey('repeatCell');
+
+      expect(await runner.runPending(), isFalse);
+      var job = await db.getAuditJob(jobId);
+      expect(job!.status, AuditJob.waiting);
+      expect(job.stepNext < job.stepTotal, isTrue);
+      expect(fake.books['cyc']!['وكيل الشمال']!.length, 3);
+
+      down = false;
+      expect(await runner.runPending(), isTrue);
+      job = await db.getAuditJob(jobId);
+      expect(job!.status, AuditJob.done);
+      expect(job.stepNext, job.stepTotal);
+      expect(fake.books['cyc']!['وكيل الشمال']!.length, 3);
+      expect(fake.books['cyc']!['وكيل الجنوب']!.length, 1);
+      expect(fake.colors['cyc|${fake.ids['cyc']!['الإدارة']}'], {
+        1: '#8b5cf6',
+        2: '#8b5cf6',
+        3: '#facc15',
+      });
+      final result = PayrollResult.fromJson(job.result!);
+      expect(result.success, isTrue);
+      expect((await db.getCycleCache(id))!.auditedAgentIds, {'1001', '1002'});
+    },
+  );
 }

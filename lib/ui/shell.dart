@@ -33,9 +33,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => AppScope.read(context).resumeBackgroundSync(),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final services = AppScope.read(context);
+      services.resumeAuditJobs();
+      services.resumeBackgroundSync();
+    });
   }
 
   @override
@@ -48,6 +50,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final services = AppScope.read(context);
     if (state == AppLifecycleState.resumed) {
+      services.resumeAuditJobs();
       services.resumeBackgroundSync();
     } else if (state == AppLifecycleState.paused) {
       services.syncWorker.stop();

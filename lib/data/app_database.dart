@@ -144,6 +144,82 @@ class PayrollSettings {
   final String managementColor;
 }
 
+/// A Google audit run in the background (see `AuditJobRunner`).
+class AuditJob {
+  const AuditJob({
+    required this.id,
+    required this.cycleId,
+    required this.status,
+    required this.request,
+    required this.plan,
+    required this.stepNext,
+    required this.stepTotal,
+    required this.progress,
+    required this.error,
+    required this.result,
+    required this.attempts,
+    required this.seen,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  static const queued = 'queued';
+  static const running = 'running';
+
+  /// Interrupted (no internet, Google unreachable): resumes automatically.
+  static const waiting = 'waiting';
+  static const done = 'done';
+  static const failed = 'failed';
+
+  final int id;
+  final int cycleId;
+  final String status;
+  final Map<String, Object?> request;
+  final Map<String, Object?>? plan;
+
+  /// Index of the first plan step not yet done.
+  final int stepNext;
+  final int stepTotal;
+  final String? progress;
+  final String? error;
+  final Map<String, Object?>? result;
+  final int attempts;
+
+  /// The result was already announced in the app.
+  final bool seen;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get active => status == queued || status == running || status == waiting;
+
+  static Map<String, Object?>? _json(Object? v) {
+    if (v == null) return null;
+    try {
+      final d = jsonDecode(v as String);
+      return d is Map ? Map<String, Object?>.from(d) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static AuditJob fromRow(Map<String, Object?> r) => AuditJob(
+    id: r['id'] as int,
+    cycleId: r['cycle_id'] as int,
+    status: r['status'] as String,
+    request: _json(r['request_json']) ?? const {},
+    plan: _json(r['plan_json']),
+    stepNext: (r['step_next'] as num?)?.toInt() ?? 0,
+    stepTotal: (r['step_total'] as num?)?.toInt() ?? 0,
+    progress: r['progress'] as String?,
+    error: r['error'] as String?,
+    result: _json(r['result_json']),
+    attempts: (r['attempts'] as num?)?.toInt() ?? 0,
+    seen: (r['seen'] as num?) == 1,
+    createdAt: DateTime.tryParse(r['created_at'] as String) ?? DateTime.now(),
+    updatedAt: DateTime.tryParse(r['updated_at'] as String) ?? DateTime.now(),
+  );
+}
+
 class AuditRun {
   const AuditRun({
     required this.id,
@@ -163,7 +239,7 @@ class AuditRun {
 class AppDatabase {
   AppDatabase._(this._db);
   final Database _db;
-  static const schemaVersion = 2;
+  static const schemaVersion = 3;
 
   static Future<AppDatabase> open({
     String? path,
@@ -183,6 +259,7 @@ class AppDatabase {
               'ALTER TABLE payroll_cycle_cache ADD COLUMN stale_after TEXT',
             );
           }
+          if (oldVersion < 3) await _createJobs(db);
         },
       ),
     );
@@ -248,12 +325,131 @@ class AppDatabase {
       created_at TEXT NOT NULL,
       mode TEXT NOT NULL,
       payload_json TEXT NOT NULL)''');
+    await _createJobs(db);
     await db.execute('''CREATE TABLE kv (
       key TEXT PRIMARY KEY,
       value TEXT)''');
   }
 
+  static Future<void> _createJobs(DatabaseExecutor db) =>
+      db.execute('''CREATE TABLE audit_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cycle_id INTEGER NOT NULL REFERENCES financial_cycles(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      plan_json TEXT,
+      step_next INTEGER NOT NULL DEFAULT 0,
+      step_total INTEGER NOT NULL DEFAULT 0,
+      progress TEXT,
+      error TEXT,
+      result_json TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      seen INTEGER NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_until TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL)''');
+
   static String _now() => DateTime.now().toIso8601String();
+
+  // ---------------------------------------------------------- audit jobs
+
+  Future<int> createAuditJob(int cycleId, Map<String, Object?> request) {
+    final now = _now();
+    return _db.insert('audit_jobs', {
+      'cycle_id': cycleId,
+      'status': AuditJob.queued,
+      'request_json': jsonEncode(request),
+      'progress': 'في الانتظار...',
+      'created_at': now,
+      'updated_at': now,
+    });
+  }
+
+  /// Job columns without the (large) plan, for the progress display.
+  static const _jobSummaryColumns = [
+    'id',
+    'cycle_id',
+    'status',
+    'request_json',
+    'step_next',
+    'step_total',
+    'progress',
+    'error',
+    'result_json',
+    'attempts',
+    'seen',
+    'created_at',
+    'updated_at',
+  ];
+
+  Future<AuditJob?> getAuditJob(int id) async {
+    final rows = await _db.query(
+      'audit_jobs',
+      columns: _jobSummaryColumns,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return rows.isEmpty ? null : AuditJob.fromRow(rows.first);
+  }
+
+  /// Jobs that still have work to do, oldest first.
+  Future<List<AuditJob>> pendingAuditJobs() async {
+    final rows = await _db.query(
+      'audit_jobs',
+      where: 'status IN (?, ?, ?)',
+      whereArgs: [AuditJob.queued, AuditJob.running, AuditJob.waiting],
+      orderBy: 'id',
+    );
+    return rows.map(AuditJob.fromRow).toList();
+  }
+
+  Future<AuditJob?> latestAuditJob(int cycleId) async {
+    final rows = await _db.query(
+      'audit_jobs',
+      columns: _jobSummaryColumns,
+      where: 'cycle_id = ?',
+      whereArgs: [cycleId],
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AuditJob.fromRow(rows.first);
+  }
+
+  /// Takes the job for [owner] (the app or the background worker) unless
+  /// another runner holds a valid lease. One atomic UPDATE, so two runners
+  /// can never both win.
+  Future<bool> claimAuditJob(int id, String owner, Duration lease) async {
+    final now = DateTime.now();
+    final n = await _db.rawUpdate(
+      'UPDATE audit_jobs SET lease_owner = ?, lease_until = ?, updated_at = ? '
+      'WHERE id = ? AND (lease_until IS NULL OR lease_until < ? OR lease_owner = ?)',
+      [
+        owner,
+        now.add(lease).toIso8601String(),
+        now.toIso8601String(),
+        id,
+        now.toIso8601String(),
+        owner,
+      ],
+    );
+    return n == 1;
+  }
+
+  Future<void> releaseAuditJob(int id) => _db.update(
+    'audit_jobs',
+    {'lease_owner': null, 'lease_until': null},
+    where: 'id = ?',
+    whereArgs: [id],
+  );
+
+  Future<void> updateAuditJob(int id, Map<String, Object?> fields) =>
+      _db.update(
+        'audit_jobs',
+        {...fields, 'updated_at': _now()},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
 
   // ---------------------------------------------------------------- cycles
 
