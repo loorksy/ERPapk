@@ -458,7 +458,11 @@ class SearchService {
       if (props == null || props['sheetId'] is! num) {
         throw Exception('فشل إنشاء الورقة الجديدة في جدول الإدارة');
       }
-      found = SheetProps((props['sheetId'] as num).toInt(), targetTitle);
+      found = SheetProps(
+        (props['sheetId'] as num).toInt(),
+        targetTitle,
+        ((props['gridProperties'] as Map?)?['columnCount'] as num?)?.toInt(),
+      );
     }
     final range = rangeWholeSheet(targetTitle);
     final existingRows = await withSheetsRetry(
@@ -481,7 +485,17 @@ class SearchService {
                 : existingRows.length;
         await withSheetsRetry(
           () => sheets.batchUpdate(spreadsheetId, [
-            colorRowRequest(found!.sheetId, start, rowColor),
+            colorRowRequest(
+              found!.sheetId,
+              start,
+              rowColor,
+              // append widens the grid to the row when needed
+              endColumn: [
+                mgmtRow.length,
+                found.columnCount ?? 0,
+                1,
+              ].reduce((a, b) => a > b ? a : b).clamp(1, 200),
+            ),
           ]),
         );
       } catch (_) {}
@@ -540,7 +554,14 @@ class SearchService {
     final requests = <Map<String, dynamic>>[];
     for (var idx = 1; idx < rows.length; idx++) {
       if (normalizeUserId(cellAt(rows[idx], idCol)) == member) {
-        requests.add(colorRowRequest(sheetId, idx, color));
+        requests.add(
+          colorRowRequest(
+            sheetId,
+            idx,
+            color,
+            endColumn: colorEndColumn(meta, sheetId),
+          ),
+        );
       }
     }
     if (requests.isNotEmpty) {

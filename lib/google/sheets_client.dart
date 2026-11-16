@@ -29,9 +29,12 @@ class SpreadsheetFile {
 }
 
 class SheetProps {
-  const SheetProps(this.sheetId, this.title);
+  const SheetProps(this.sheetId, this.title, [this.columnCount]);
   final int sheetId;
   final String title;
+
+  /// Number of columns in the sheet grid (null when unknown).
+  final int? columnCount;
 }
 
 class SpreadsheetMeta {
@@ -39,8 +42,10 @@ class SpreadsheetMeta {
     required this.spreadsheetId,
     required this.spreadsheetUrl,
     required this.sheets,
+    this.title,
   });
   final String spreadsheetId;
+  final String? title;
   final String? spreadsheetUrl;
   final List<SheetProps> sheets;
 
@@ -124,6 +129,21 @@ class GoogleSheetsApi implements SheetsApi {
       } catch (_) {}
       if (response.statusCode == 401) {
         message = 'انتهى تفويض Google. أعد ربط الحساب من الإعدادات.';
+      } else if (reason == 'accessNotConfigured' ||
+          message.contains('has not been used') ||
+          message.contains('is disabled')) {
+        final api =
+            uri.host.startsWith('sheets')
+                ? 'Google Sheets API'
+                : 'Google Drive API';
+        message =
+            '$api غير مفعّلة في مشروع Google Cloud الخاص بالتطبيق. فعّلها من console.cloud.google.com ← APIs & Services ← Library ثم أعد المحاولة بعد دقائق.';
+      } else if (response.statusCode == 403) {
+        message =
+            'لا يملك حساب Google صلاحية الوصول إلى هذا الملف أو تعديله. ($message)';
+      } else if (response.statusCode == 404) {
+        message =
+            'الملف أو الورقة غير موجودة في Google، أو ليست مشاركة مع الحساب المتصل.';
       }
       throw SheetsApiException(
         message,
@@ -170,17 +190,21 @@ class GoogleSheetsApi implements SheetsApi {
       'GET',
       _sheets('/${Uri.encodeComponent(spreadsheetId)}', {
         'fields':
-            'spreadsheetId,spreadsheetUrl,sheets(properties(sheetId,title))',
+            'spreadsheetId,spreadsheetUrl,properties(title),sheets(properties(sheetId,title,gridProperties(columnCount)))',
       }),
     );
     return SpreadsheetMeta(
       spreadsheetId: (json['spreadsheetId'] ?? spreadsheetId).toString(),
       spreadsheetUrl: json['spreadsheetUrl'] as String?,
+      title: (json['properties'] as Map?)?['title'] as String?,
       sheets: [
         for (final s in (json['sheets'] as List? ?? const []))
           SheetProps(
             ((s as Map)['properties']['sheetId'] as num).toInt(),
             (s['properties']['title'] ?? '').toString(),
+            ((s['properties']['gridProperties'] as Map?)?['columnCount']
+                    as num?)
+                ?.toInt(),
           ),
       ],
     );
@@ -431,6 +455,18 @@ Future<void> batchUpdateRequestsInChunks(
     onProgress?.call(min(i + chunkSize, requests.length), requests.length);
     if (i + chunkSize < requests.length && delayMs > 0) await sleepMs(delayMs);
   }
+}
+
+/// Last column (exclusive) to color: ERP uses 200, limited to the grid so a
+/// narrow sheet does not reject the range.
+int colorEndColumn(SpreadsheetMeta meta, int sheetId, [int minimum = 1]) {
+  for (final s in meta.sheets) {
+    if (s.sheetId == sheetId && s.columnCount != null) {
+      final c = s.columnCount! < minimum ? minimum : s.columnCount!;
+      return c > 200 ? 200 : c;
+    }
+  }
+  return 200;
 }
 
 /// ERP `getSheetIdByTitle`.

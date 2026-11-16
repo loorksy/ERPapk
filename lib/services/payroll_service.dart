@@ -468,7 +468,11 @@ class PayrollService {
         await batchUpdateRequestsInChunks(
           sheets,
           cycleMgmtSsId,
-          _colorRequests(mgmtSheetId, colors.mgmt),
+          _colorRequests(
+            mgmtSheetId,
+            colors.mgmt,
+            colorEndColumn(metaMgmt, mgmtSheetId),
+          ),
           onProgress: (d, t) => progress('2/2 تلوين صفوف الإدارة ($d/$t)...'),
         );
       }
@@ -482,7 +486,11 @@ class PayrollService {
         await batchUpdateRequestsInChunks(
           sheets,
           cycleAgentSsId,
-          _colorRequests(agentSheetId, colors.agent),
+          _colorRequests(
+            agentSheetId,
+            colors.agent,
+            colorEndColumn(metaAgent, agentSheetId),
+          ),
           onProgress: (d, t) => progress('2/2 تلوين صفوف الوكيل ($d/$t)...'),
         );
       }
@@ -727,11 +735,12 @@ class PayrollService {
   static List<Map<String, dynamic>> _colorRequests(
     int sheetId,
     Map<int, String> byRow,
+    int endColumn,
   ) {
     final keys = byRow.keys.toList()..sort();
     return [
       for (final rowIdx in keys)
-        colorRowRequest(sheetId, rowIdx, byRow[rowIdx]!),
+        colorRowRequest(sheetId, rowIdx, byRow[rowIdx]!, endColumn: endColumn),
     ];
   }
 
@@ -860,14 +869,19 @@ class PayrollService {
   }
 }
 
-Map<String, dynamic> colorRowRequest(int sheetId, int rowIdx, String color) => {
+Map<String, dynamic> colorRowRequest(
+  int sheetId,
+  int rowIdx,
+  String color, {
+  int endColumn = 200,
+}) => {
   'repeatCell': {
     'range': {
       'sheetId': sheetId,
       'startRowIndex': rowIdx,
       'endRowIndex': rowIdx + 1,
       'startColumnIndex': 0,
-      'endColumnIndex': 200,
+      'endColumnIndex': endColumn,
     },
     'cell': {
       'userEnteredFormat': {'backgroundColor': hexToRgb(color)},

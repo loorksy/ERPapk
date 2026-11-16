@@ -276,52 +276,57 @@ class ErpSelect<T> extends StatelessWidget {
       color: thick ? Tw.slate200 : Tw.slate300,
       width: thick ? 2 : 1,
     );
-    return DropdownButtonFormField<T>(
-      value: effective,
-      isExpanded: true,
-      menuMaxHeight: 420,
-      icon: const FaIcon(
-        FontAwesomeIcons.chevronDown,
-        size: 12,
-        color: Tw.slate500,
-      ),
-      dropdownColor: Colors.white,
-      borderRadius: BorderRadius.circular(12),
-      style: const TextStyle(
-        fontFamily: erpFont,
-        fontSize: 14,
-        color: Tw.slate900,
-      ),
+    final callback =
+        !enabled || onChanged == null
+            ? null
+            : (T? v) {
+              if (v != null || null is T) onChanged!(v as T);
+            };
+    // A plain DropdownButton always shows [value]: when the parent ignores a
+    // choice (e.g. a cancelled file or link picker) the old value stays.
+    return InputDecorator(
+      isEmpty: false,
       decoration: InputDecoration(
         filled: true,
         fillColor: muted ? Tw.slate50 : Colors.white,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 12,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         border: OutlineInputBorder(borderRadius: radius, borderSide: side),
         enabledBorder: OutlineInputBorder(
           borderRadius: radius,
           borderSide: side,
         ),
-        focusedBorder: OutlineInputBorder(
+        disabledBorder: OutlineInputBorder(
           borderRadius: radius,
-          borderSide: const BorderSide(color: Tw.indigo500, width: 2),
+          borderSide: side,
         ),
       ),
-      items: [
-        for (final o in options)
-          DropdownMenuItem<T>(
-            value: o.value,
-            child: Text(o.label, overflow: TextOverflow.ellipsis),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: effective,
+          isExpanded: true,
+          menuMaxHeight: 420,
+          icon: const FaIcon(
+            FontAwesomeIcons.chevronDown,
+            size: 12,
+            color: Tw.slate500,
           ),
-      ],
-      onChanged:
-          !enabled || onChanged == null
-              ? null
-              : (v) {
-                if (v != null || null is T) onChanged!(v as T);
-              },
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          style: const TextStyle(
+            fontFamily: erpFont,
+            fontSize: 14,
+            color: Tw.slate900,
+          ),
+          items: [
+            for (final o in options)
+              DropdownMenuItem<T>(
+                value: o.value,
+                child: Text(o.label, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: callback,
+        ),
+      ),
     );
   }
 }

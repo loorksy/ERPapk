@@ -22,8 +22,7 @@ class AuditApplication extends StatefulWidget {
 class _AuditApplicationState extends State<AuditApplication> {
   late final Future<AppServices> _services = AppServices.open();
 
-  @override
-  Widget build(BuildContext context) => MaterialApp(
+  MaterialApp _app(Widget home) => MaterialApp(
     title: 'تدقيق لورك',
     debugShowCheckedModeBanner: false,
     locale: const Locale('ar'),
@@ -34,22 +33,29 @@ class _AuditApplicationState extends State<AuditApplication> {
       GlobalCupertinoLocalizations.delegate,
     ],
     theme: buildErpTheme(),
-    home: FutureBuilder<AppServices>(
-      future: _services,
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return const Scaffold(
+    home: home,
+  );
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<AppServices>(
+    future: _services,
+    builder: (context, snap) {
+      if (snap.hasError) {
+        return _app(
+          const Scaffold(
             body: Center(child: Text('تعذر فتح البيانات المحفوظة على الجهاز.')),
-          );
-        }
-        final services = snap.data;
-        if (services == null) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        return AppScope(services: services, child: const AppShell());
-      },
-    ),
+          ),
+        );
+      }
+      final services = snap.data;
+      if (services == null) {
+        return _app(
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+        );
+      }
+      // AppScope sits above the Navigator so dialogs and bottom sheets
+      // (new routes) can reach the database and the Google connection too.
+      return AppScope(services: services, child: _app(const AppShell()));
+    },
   );
 }

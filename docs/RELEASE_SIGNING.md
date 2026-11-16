@@ -7,7 +7,7 @@
 | البيان | القيمة المتحقق منها |
 |---|---|
 | applicationId وnamespace | `cloud.lork.audit.standalone` |
-| versionName / versionCode | `2.0.0` / `2` (البيانات أدناه عن APK 1.0.0 المتحقق منه سابقًا) |
+| versionName / versionCode | `2.0.1` / `3` (البيانات أدناه عن APK 1.0.0 المتحقق منه سابقًا) |
 | Release alias | `lork-audit-release` |
 | المخزن والمفتاح | JKS، RSA 2048 بت |
 | SHA-1 لشهادة Release | `B1:12:AB:9A:C6:2B:E1:57:DA:D6:3D:ED:8C:1E:49:B0:CB:CE:46:3B` |

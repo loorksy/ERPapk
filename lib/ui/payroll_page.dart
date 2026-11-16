@@ -20,6 +20,7 @@ import '../services/cycle_service.dart';
 import '../services/payroll_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'spreadsheet_link.dart';
 
 const _draftKey = 'payrollAuditDraftV1';
 const _localSource = '__local_file__';
@@ -294,7 +295,11 @@ class _PayrollPageState extends State<PayrollPage> {
       final list = await _s.sheets.listSpreadsheets();
       if (!mounted) return;
       setState(() {
-        _spreadsheets = list;
+        _spreadsheets = [
+          ...list,
+          for (final f in _spreadsheets)
+            if (!list.any((x) => x.id == f.id)) f,
+        ];
         _ssMessage = null;
       });
     } catch (e) {
@@ -312,6 +317,7 @@ class _PayrollPageState extends State<PayrollPage> {
             ? '📁 ملف من الجهاز (Excel / CSV)…'
             : '📁 ${_localFile!.fileName}',
       ),
+      const SelectOption(pasteLinkValue, pasteLinkLabel),
       for (final f in _spreadsheets) SelectOption(f.id, f.name),
       if (_spreadsheetId.isNotEmpty &&
           _spreadsheetId != _localSource &&
@@ -320,7 +326,17 @@ class _PayrollPageState extends State<PayrollPage> {
     ];
   }
 
-  Future<void> _onSourceChanged(String v) async {
+  Future<void> _onSourceChanged(String picked) async {
+    var v = picked;
+    if (v == pasteLinkValue) {
+      final f = await askSpreadsheetLink(context, _s.sheets);
+      if (f == null || !mounted) return;
+      setState(() {
+        _spreadsheets = [f, ..._spreadsheets.where((x) => x.id != f.id)];
+        _ssMessage = null;
+      });
+      v = f.id;
+    }
     if (v == _localSource) {
       try {
         final f = await pickSpreadsheetFile();

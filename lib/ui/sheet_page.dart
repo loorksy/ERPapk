@@ -11,6 +11,7 @@ import '../erp/js_compat.dart';
 import '../google/sheets_client.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'spreadsheet_link.dart';
 
 const _months = [
   'يناير',
@@ -456,7 +457,11 @@ class _CycleModalState extends State<CycleModal> {
       final files = await _s.sheets.listSpreadsheets();
       if (!mounted) return;
       setState(() {
-        _files = files;
+        _files = [
+          ...files,
+          for (final f in _files)
+            if (!files.any((x) => x.id == f.id)) f,
+        ];
         _listMessage = null;
       });
     } catch (e) {
@@ -485,10 +490,16 @@ class _CycleModalState extends State<CycleModal> {
 
   List<SelectOption<String>> _ssOptions() {
     final msg = _listMessage;
-    if (msg != null) return [SelectOption('', msg)];
+    if (msg != null) {
+      return [
+        SelectOption('', msg),
+        const SelectOption(pasteLinkValue, pasteLinkLabel),
+      ];
+    }
     final known = {for (final f in _files) f.id};
     return [
       const SelectOption('', '— اختر الجدول —'),
+      const SelectOption(pasteLinkValue, pasteLinkLabel),
       for (final f in _files) SelectOption(f.id, f.name),
       if (_mgmtSs.isNotEmpty && !known.contains(_mgmtSs))
         SelectOption(_mgmtSs, _mgmtSs),
@@ -857,7 +868,17 @@ class _CycleModalState extends State<CycleModal> {
                 thick: true,
                 options: _ssOptions(),
                 value: ss,
-                onChanged: (v) {
+                onChanged: (picked) async {
+                  var v = picked;
+                  if (v == pasteLinkValue) {
+                    final f = await askSpreadsheetLink(context, _s.sheets);
+                    if (f == null || !mounted) return;
+                    setState(() {
+                      _files = [f, ..._files.where((x) => x.id != f.id)];
+                      _listMessage = null;
+                    });
+                    v = f.id;
+                  }
                   setState(() {
                     if (mgmt) {
                       _mgmtSs = v;
