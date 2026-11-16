@@ -34,6 +34,8 @@ class Cycle {
     required this.name,
     required this.managementRows,
     required this.agentRows,
+    this.managementCount = 0,
+    this.agentCount = 0,
     this.managementSpreadsheetId,
     this.managementSheetName,
     this.agentSpreadsheetId,
@@ -47,8 +49,15 @@ class Cycle {
 
   final int id;
   final String name;
+
+  /// Empty in the light records returned by `listCycles`/`getCycleInfo`;
+  /// loaded by `getCycle`.
   final Rows managementRows;
   final Rows agentRows;
+
+  /// Row counts, available in light records too.
+  final int managementCount;
+  final int agentCount;
   final String? managementSpreadsheetId;
   final String? managementSheetName;
   final String? agentSpreadsheetId;
@@ -62,11 +71,18 @@ class Cycle {
   bool get linkedToGoogle =>
       managementSpreadsheetId != null && agentSpreadsheetId != null;
 
-  static Cycle fromRow(Map<String, Object?> r) => Cycle(
+  static Cycle fromRow(
+    Map<String, Object?> r, {
+    Rows? management,
+    Rows? agent,
+  }) => Cycle(
     id: r['id'] as int,
     name: (r['name'] ?? '').toString(),
-    managementRows: decodeRows(r['management_data'] as String?),
-    agentRows: decodeRows(r['agent_data'] as String?),
+    managementRows: management ?? const <List<String>>[],
+    agentRows: agent ?? const <List<String>>[],
+    managementCount:
+        (r['management_count'] as num?)?.toInt() ?? management?.length ?? 0,
+    agentCount: (r['agent_count'] as num?)?.toInt() ?? agent?.length ?? 0,
     managementSpreadsheetId: _str(r['management_spreadsheet_id']),
     managementSheetName: _str(r['management_sheet_name']),
     agentSpreadsheetId: _str(r['agent_spreadsheet_id']),
@@ -151,12 +167,10 @@ class AuditJob {
     required this.cycleId,
     required this.status,
     required this.request,
-    required this.plan,
     required this.stepNext,
     required this.stepTotal,
     required this.progress,
     required this.error,
-    required this.result,
     required this.attempts,
     required this.seen,
     required this.createdAt,
@@ -175,14 +189,12 @@ class AuditJob {
   final int cycleId;
   final String status;
   final Map<String, Object?> request;
-  final Map<String, Object?>? plan;
 
   /// Index of the first plan step not yet done.
   final int stepNext;
   final int stepTotal;
   final String? progress;
   final String? error;
-  final Map<String, Object?>? result;
   final int attempts;
 
   /// The result was already announced in the app.
@@ -207,12 +219,10 @@ class AuditJob {
     cycleId: r['cycle_id'] as int,
     status: r['status'] as String,
     request: _json(r['request_json']) ?? const {},
-    plan: _json(r['plan_json']),
     stepNext: (r['step_next'] as num?)?.toInt() ?? 0,
     stepTotal: (r['step_total'] as num?)?.toInt() ?? 0,
     progress: r['progress'] as String?,
     error: r['error'] as String?,
-    result: _json(r['result_json']),
     attempts: (r['attempts'] as num?)?.toInt() ?? 0,
     seen: (r['seen'] as num?) == 1,
     createdAt: DateTime.tryParse(r['created_at'] as String) ?? DateTime.now(),
@@ -239,7 +249,7 @@ class AuditRun {
 class AppDatabase {
   AppDatabase._(this._db);
   final Database _db;
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   static Future<AppDatabase> open({
     String? path,
@@ -260,6 +270,16 @@ class AppDatabase {
             );
           }
           if (oldVersion < 3) await _createJobs(db);
+          if (oldVersion < 4) {
+            await db.execute(
+              'ALTER TABLE financial_cycles ADD COLUMN management_count INTEGER NOT NULL DEFAULT 0',
+            );
+            await db.execute(
+              'ALTER TABLE financial_cycles ADD COLUMN agent_count INTEGER NOT NULL DEFAULT 0',
+            );
+            await _createBlobs(db);
+            await _moveDataToBlobs(db);
+          }
         },
       ),
     );
@@ -282,6 +302,8 @@ class AppDatabase {
       user_info_sheet_name TEXT,
       payroll_audit_user_info_hash TEXT,
       payroll_audit_closed_at TEXT,
+      management_count INTEGER NOT NULL DEFAULT 0,
+      agent_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL)''');
     await db.execute('''CREATE TABLE payroll_settings (
@@ -326,6 +348,7 @@ class AppDatabase {
       mode TEXT NOT NULL,
       payload_json TEXT NOT NULL)''');
     await _createJobs(db);
+    await _createBlobs(db);
     await db.execute('''CREATE TABLE kv (
       key TEXT PRIMARY KEY,
       value TEXT)''');
@@ -349,6 +372,162 @@ class AppDatabase {
       lease_until TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL)''');
+
+  // ---------------------------------------------------------------- blobs
+  //
+  // Android cannot read a single SQLite value larger than ~2 MB (cursor
+  // window), so sheet snapshots, plans and results are stored as chunks.
+  // This keeps the number of rows unlimited (owner's request).
+
+  static Future<void> _createBlobs(DatabaseExecutor db) =>
+      db.execute('''CREATE TABLE blobs (
+      key TEXT NOT NULL,
+      idx INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (key, idx))''');
+
+  /// UTF-16 code units per chunk (at most ~600 KB of UTF-8).
+  static const blobChunk = 200000;
+
+  static Future<void> _writeBlob(
+    DatabaseExecutor db,
+    String key,
+    String? text,
+  ) async {
+    await db.delete('blobs', where: 'key = ?', whereArgs: [key]);
+    if (text == null) return;
+    var idx = 0;
+    var start = 0;
+    while (start < text.length) {
+      var end = start + blobChunk;
+      if (end >= text.length) {
+        end = text.length;
+      } else {
+        // Never split a surrogate pair (emoji, styled letters in names).
+        final unit = text.codeUnitAt(end - 1);
+        if (unit >= 0xD800 && unit <= 0xDBFF) end--;
+      }
+      await db.insert('blobs', {
+        'key': key,
+        'idx': idx++,
+        'data': text.substring(start, end),
+      });
+      start = end;
+    }
+  }
+
+  Future<void> putBlob(String key, String? text) =>
+      _db.transaction((txn) => _writeBlob(txn, key, text));
+
+  Future<String?> getBlob(String key) async {
+    final rows = await _db.query(
+      'blobs',
+      columns: ['data'],
+      where: 'key = ?',
+      whereArgs: [key],
+      orderBy: 'idx',
+    );
+    if (rows.isEmpty) return null;
+    final out = StringBuffer();
+    for (final r in rows) {
+      out.write(r['data'] as String);
+    }
+    return out.toString();
+  }
+
+  Future<void> _deleteBlobs(String prefix) =>
+      _db.delete('blobs', where: 'key LIKE ?', whereArgs: ['$prefix%']);
+
+  static String _cycleKey(int id, String part) => 'cycle/$id/$part';
+  static String _cacheKey(int id, String part) => 'cache/$id/$part';
+  static String _jobKey(int id, String part) => 'job/$id/$part';
+
+  /// Schema 4: moves the large values written by earlier versions.
+  static Future<void> _moveDataToBlobs(DatabaseExecutor db) async {
+    Future<void> move(
+      String table,
+      String idColumn,
+      String column,
+      String Function(int id) key, {
+      String? countColumn,
+      Object? emptyValue,
+    }) async {
+      final ids = await db.query(table, columns: [idColumn]);
+      for (final r in ids) {
+        final id = r[idColumn] as int;
+        String? text;
+        try {
+          final v = await db.query(
+            table,
+            columns: [column],
+            where: '$idColumn = ?',
+            whereArgs: [id],
+          );
+          text = v.isEmpty ? null : v.first[column] as String?;
+        } catch (_) {
+          continue; // too large to read: nothing usable to move
+        }
+        if (text == null || text.isEmpty) continue;
+        await _writeBlob(db, key(id), text);
+        await db.update(
+          table,
+          {
+            column: emptyValue,
+            if (countColumn != null) countColumn: decodeRows(text).length,
+          },
+          where: '$idColumn = ?',
+          whereArgs: [id],
+        );
+      }
+    }
+
+    await move(
+      'financial_cycles',
+      'id',
+      'management_data',
+      (id) => _cycleKey(id, 'management'),
+      countColumn: 'management_count',
+    );
+    await move(
+      'financial_cycles',
+      'id',
+      'agent_data',
+      (id) => _cycleKey(id, 'agent'),
+      countColumn: 'agent_count',
+    );
+    await move(
+      'financial_cycles',
+      'id',
+      'user_info_data',
+      (id) => _cycleKey(id, 'userinfo'),
+    );
+    await move(
+      'payroll_cycle_cache',
+      'cycle_id',
+      'management_data',
+      (id) => _cacheKey(id, 'management'),
+    );
+    await move(
+      'payroll_cycle_cache',
+      'cycle_id',
+      'agent_data',
+      (id) => _cacheKey(id, 'agent'),
+    );
+    await move(
+      'local_workbooks',
+      'cycle_id',
+      'state_json',
+      (id) => 'workbook/$id',
+      emptyValue: '',
+    );
+    await move('audit_jobs', 'id', 'plan_json', (id) => _jobKey(id, 'plan'));
+    await move(
+      'audit_jobs',
+      'id',
+      'result_json',
+      (id) => _jobKey(id, 'result'),
+    );
+  }
 
   static String _now() => DateTime.now().toIso8601String();
 
@@ -376,7 +555,6 @@ class AppDatabase {
     'step_total',
     'progress',
     'error',
-    'result_json',
     'attempts',
     'seen',
     'created_at',
@@ -397,6 +575,7 @@ class AppDatabase {
   Future<List<AuditJob>> pendingAuditJobs() async {
     final rows = await _db.query(
       'audit_jobs',
+      columns: _jobSummaryColumns,
       where: 'status IN (?, ?, ?)',
       whereArgs: [AuditJob.queued, AuditJob.running, AuditJob.waiting],
       orderBy: 'id',
@@ -443,31 +622,80 @@ class AppDatabase {
     whereArgs: [id],
   );
 
-  Future<void> updateAuditJob(int id, Map<String, Object?> fields) =>
-      _db.update(
-        'audit_jobs',
-        {...fields, 'updated_at': _now()},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+  /// `plan_json` / `result_json` in [fields] are stored as blobs.
+  Future<void> updateAuditJob(int id, Map<String, Object?> fields) async {
+    final row = Map<String, Object?>.from(fields);
+    for (final part in const ['plan', 'result']) {
+      final key = '${part}_json';
+      if (row.containsKey(key)) {
+        await putBlob(_jobKey(id, part), row.remove(key) as String?);
+      }
+    }
+    row['updated_at'] = _now();
+    await _db.update('audit_jobs', row, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<Map<String, Object?>?> getAuditJobPlan(int id) async =>
+      AuditJob._json(await getBlob(_jobKey(id, 'plan')));
+
+  Future<Map<String, Object?>?> getAuditJobResult(int id) async =>
+      AuditJob._json(await getBlob(_jobKey(id, 'result')));
 
   // ---------------------------------------------------------------- cycles
 
+  static const _cycleColumns = [
+    'id',
+    'name',
+    'management_spreadsheet_id',
+    'management_sheet_name',
+    'agent_spreadsheet_id',
+    'agent_sheet_name',
+    'transfer_discount_pct',
+    'user_info_spreadsheet_id',
+    'user_info_sheet_name',
+    'payroll_audit_user_info_hash',
+    'payroll_audit_closed_at',
+    'management_count',
+    'agent_count',
+    'created_at',
+    'updated_at',
+  ];
+
+  /// Light records (names, links, row counts) without the sheet data.
   Future<List<Cycle>> listCycles() async {
     final rows = await _db.query(
       'financial_cycles',
+      columns: _cycleColumns,
       orderBy: 'created_at DESC, id DESC',
     );
-    return rows.map(Cycle.fromRow).toList();
+    return rows.map((r) => Cycle.fromRow(r)).toList();
   }
 
-  Future<Cycle?> getCycle(int id) async {
+  /// One cycle without its sheet data.
+  Future<Cycle?> getCycleInfo(int id) async {
     final rows = await _db.query(
       'financial_cycles',
+      columns: _cycleColumns,
       where: 'id = ?',
       whereArgs: [id],
     );
     return rows.isEmpty ? null : Cycle.fromRow(rows.first);
+  }
+
+  /// One cycle with its management and agent snapshots.
+  Future<Cycle?> getCycle(int id) async {
+    final rows = await _db.query(
+      'financial_cycles',
+      columns: _cycleColumns,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (rows.isEmpty) return null;
+    return Cycle.fromRow(
+      rows.first,
+      management: decodeRows(await getBlob(_cycleKey(id, 'management'))),
+      agent: decodeRows(await getBlob(_cycleKey(id, 'agent'))),
+    );
   }
 
   Future<int> insertCycle({
@@ -479,13 +707,12 @@ class AppDatabase {
     String? agentSpreadsheetId,
     String? agentSheetName,
     double transferDiscountPct = 0,
-  }) {
+  }) async {
     final now = _now();
-    return _db.insert('financial_cycles', {
+    final id = await _db.insert('financial_cycles', {
       'name': name,
-      'management_data':
-          managementRows == null ? null : jsonEncode(managementRows),
-      'agent_data': agentRows == null ? null : jsonEncode(agentRows),
+      'management_count': managementRows?.length ?? 0,
+      'agent_count': agentRows?.length ?? 0,
       'management_spreadsheet_id': _str(managementSpreadsheetId),
       'management_sheet_name': _str(managementSheetName),
       'agent_spreadsheet_id': _str(agentSpreadsheetId),
@@ -494,12 +721,39 @@ class AppDatabase {
       'created_at': now,
       'updated_at': now,
     });
+    if (managementRows != null) {
+      await putBlob(_cycleKey(id, 'management'), jsonEncode(managementRows));
+    }
+    if (agentRows != null) {
+      await putBlob(_cycleKey(id, 'agent'), jsonEncode(agentRows));
+    }
+    return id;
   }
 
   /// Only the provided fields change (like ERP `PUT /cycles/:id`).
   Future<void> updateCycle(int id, Map<String, Object?> fields) async {
+    const blobParts = {
+      'management_data': 'management',
+      'agent_data': 'agent',
+      'user_info_data': 'userinfo',
+    };
     final values = <String, Object?>{};
+    for (final e in blobParts.entries) {
+      if (!fields.containsKey(e.key)) continue;
+      final rows = fields[e.key];
+      await putBlob(
+        _cycleKey(id, e.value),
+        rows == null ? null : jsonEncode(rows),
+      );
+      if (e.value == 'management') {
+        values['management_count'] = rows is List ? rows.length : 0;
+      }
+      if (e.value == 'agent') {
+        values['agent_count'] = rows is List ? rows.length : 0;
+      }
+    }
     fields.forEach((key, value) {
+      if (blobParts.containsKey(key)) return;
       if (value is List) {
         values[key] = jsonEncode(value);
       } else if (value is String && key.endsWith('_id') ||
@@ -518,8 +772,21 @@ class AppDatabase {
     );
   }
 
-  Future<void> deleteCycle(int id) =>
-      _db.delete('financial_cycles', where: 'id = ?', whereArgs: [id]);
+  Future<void> deleteCycle(int id) async {
+    final jobs = await _db.query(
+      'audit_jobs',
+      columns: ['id'],
+      where: 'cycle_id = ?',
+      whereArgs: [id],
+    );
+    for (final j in jobs) {
+      await _deleteBlobs('job/${j['id']}/');
+    }
+    await _deleteBlobs('cycle/$id/');
+    await _deleteBlobs('cache/$id/');
+    await _deleteBlobs('workbook/$id');
+    await _db.delete('financial_cycles', where: 'id = ?', whereArgs: [id]);
+  }
 
   Future<void> setAuditClosed(int id, bool closed) async {
     if (closed) {
@@ -585,9 +852,64 @@ class AppDatabase {
 
   // ----------------------------------------------------------------- cache
 
+  static const _cacheColumns = [
+    'cycle_id',
+    'management_sheet_name',
+    'agent_sheet_name',
+    'audited_agent_ids',
+    'audited_mgmt_ids',
+    'found_in_target_sheet_ids',
+    'synced_at',
+    'stale_after',
+  ];
+
+  Future<bool> hasCycleCache(int cycleId) async {
+    final rows = await _db.query(
+      'payroll_cycle_cache',
+      columns: ['cycle_id'],
+      where: 'cycle_id = ?',
+      whereArgs: [cycleId],
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// Ids the search shows as audited from the cache (audited by the last
+  /// bulk audit or the selective audit, or coloured rows found by the
+  /// background sync), without loading the cached sheets.
+  Future<Set<String>> cacheAuditedIds(int cycleId) async {
+    final rows = await _db.query(
+      'payroll_cycle_cache',
+      columns: ['audited_agent_ids', 'audited_mgmt_ids'],
+      where: 'cycle_id = ?',
+      whereArgs: [cycleId],
+    );
+    final out = <String>{};
+    if (rows.isEmpty) return out;
+    for (final key in const ['audited_agent_ids', 'audited_mgmt_ids']) {
+      try {
+        final d = jsonDecode((rows.first[key] ?? '[]').toString());
+        if (d is List) out.addAll(d.map((e) => e.toString()));
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  /// ERP `stale_after` of the cycle cache (null when absent or unset).
+  Future<DateTime?> cacheStaleAfter(int cycleId) async {
+    final rows = await _db.query(
+      'payroll_cycle_cache',
+      columns: ['stale_after'],
+      where: 'cycle_id = ?',
+      whereArgs: [cycleId],
+    );
+    if (rows.isEmpty) return null;
+    return DateTime.tryParse((rows.first['stale_after'] ?? '').toString());
+  }
+
   Future<CycleCache?> getCycleCache(int cycleId) async {
     final rows = await _db.query(
       'payroll_cycle_cache',
+      columns: _cacheColumns,
       where: 'cycle_id = ?',
       whereArgs: [cycleId],
     );
@@ -603,8 +925,10 @@ class AppDatabase {
     }
 
     return CycleCache(
-      managementData: decodeRows(r['management_data'] as String?),
-      agentData: decodeRows(r['agent_data'] as String?),
+      managementData: decodeRows(
+        await getBlob(_cacheKey(cycleId, 'management')),
+      ),
+      agentData: decodeRows(await getBlob(_cacheKey(cycleId, 'agent'))),
       managementSheetName: _str(r['management_sheet_name']),
       agentSheetName: _str(r['agent_sheet_name']),
       auditedAgentIds: ids(r['audited_agent_ids']),
@@ -614,21 +938,23 @@ class AppDatabase {
     );
   }
 
-  Future<void> saveCycleCache(int cycleId, CycleCache c) =>
-      _db.insert('payroll_cycle_cache', {
-        'cycle_id': cycleId,
-        'management_data': jsonEncode(c.managementData),
-        'agent_data': jsonEncode(c.agentData),
-        'management_sheet_name': c.managementSheetName,
-        'agent_sheet_name': c.agentSheetName,
-        'audited_agent_ids': jsonEncode(c.auditedAgentIds.toList()),
-        'audited_mgmt_ids': jsonEncode(c.auditedMgmtIds.toList()),
-        'found_in_target_sheet_ids': jsonEncode(
-          c.foundInTargetSheetIds.toList(),
-        ),
-        'synced_at': _now(),
-        'stale_after': c.staleAfter?.toIso8601String(),
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+  Future<void> saveCycleCache(int cycleId, CycleCache c) async {
+    await putBlob(
+      _cacheKey(cycleId, 'management'),
+      jsonEncode(c.managementData),
+    );
+    await putBlob(_cacheKey(cycleId, 'agent'), jsonEncode(c.agentData));
+    await _db.insert('payroll_cycle_cache', {
+      'cycle_id': cycleId,
+      'management_sheet_name': c.managementSheetName,
+      'agent_sheet_name': c.agentSheetName,
+      'audited_agent_ids': jsonEncode(c.auditedAgentIds.toList()),
+      'audited_mgmt_ids': jsonEncode(c.auditedMgmtIds.toList()),
+      'found_in_target_sheet_ids': jsonEncode(c.foundInTargetSheetIds.toList()),
+      'synced_at': _now(),
+      'stale_after': c.staleAfter?.toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
 
   // ---------------------------------------------------------- user status
 
@@ -704,26 +1030,27 @@ class AppDatabase {
   // ------------------------------------------------------- local workbook
 
   Future<Map<String, Object?>?> getLocalWorkbook(int cycleId) async {
-    final rows = await _db.query(
-      'local_workbooks',
-      where: 'cycle_id = ?',
-      whereArgs: [cycleId],
-    );
-    if (rows.isEmpty) return null;
+    final text = await getBlob('workbook/$cycleId');
+    if (text == null || text.isEmpty) return null;
     try {
-      final d = jsonDecode(rows.first['state_json'] as String);
+      final d = jsonDecode(text);
       return d is Map ? Map<String, Object?>.from(d) : null;
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> saveLocalWorkbook(int cycleId, Map<String, Object?> state) =>
-      _db.insert('local_workbooks', {
-        'cycle_id': cycleId,
-        'state_json': jsonEncode(state),
-        'updated_at': _now(),
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+  Future<void> saveLocalWorkbook(
+    int cycleId,
+    Map<String, Object?> state,
+  ) async {
+    await putBlob('workbook/$cycleId', jsonEncode(state));
+    await _db.insert('local_workbooks', {
+      'cycle_id': cycleId,
+      'state_json': '',
+      'updated_at': _now(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
 
   // ------------------------------------------------------------- run log
 

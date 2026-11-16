@@ -316,3 +316,25 @@ class AuditPlan {
     finish: Map<String, Object?>.from(j['finish'] as Map),
   );
 }
+
+/// An agent-sheet user who has no «مدقق» status in the cycle yet.
+class PendingMember {
+  const PendingMember(this.id, this.name, this.row);
+  final String id;
+
+  /// Column C of the agent sheet.
+  final String name;
+
+  /// 1-based row in the agent sheet (first occurrence).
+  final int row;
+}
+
+class PendingAgentMembers {
+  const PendingAgentMembers(this.members, this.agentTotal);
+
+  /// Not audited yet, in agent-sheet order.
+  final List<PendingMember> members;
+
+  /// Distinct user ids in the agent sheet.
+  final int agentTotal;
+}

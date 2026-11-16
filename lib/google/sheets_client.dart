@@ -42,12 +42,15 @@ class SpreadsheetFile {
 }
 
 class SheetProps {
-  const SheetProps(this.sheetId, this.title, [this.columnCount]);
+  const SheetProps(this.sheetId, this.title, [this.columnCount, this.rowCount]);
   final int sheetId;
   final String title;
 
   /// Number of columns in the sheet grid (null when unknown).
   final int? columnCount;
+
+  /// Number of rows in the sheet grid (null when unknown).
+  final int? rowCount;
 }
 
 class SpreadsheetMeta {
@@ -226,7 +229,7 @@ class GoogleSheetsApi implements SheetsApi {
       'GET',
       _sheets('/${Uri.encodeComponent(spreadsheetId)}', {
         'fields':
-            'spreadsheetId,spreadsheetUrl,properties(title),sheets(properties(sheetId,title,gridProperties(columnCount)))',
+            'spreadsheetId,spreadsheetUrl,properties(title),sheets(properties(sheetId,title,gridProperties(columnCount,rowCount)))',
       }),
     );
     return SpreadsheetMeta(
@@ -240,6 +243,8 @@ class GoogleSheetsApi implements SheetsApi {
             (s['properties']['title'] ?? '').toString(),
             ((s['properties']['gridProperties'] as Map?)?['columnCount']
                     as num?)
+                ?.toInt(),
+            ((s['properties']['gridProperties'] as Map?)?['rowCount'] as num?)
                 ?.toInt(),
           ),
       ],
@@ -380,7 +385,6 @@ class GoogleSheetsApi implements SheetsApi {
 // ---------------------------------------------------------------------------
 
 const int sheetBatchRows = 5000;
-const int sheetMaxRows = 150000;
 
 Future<void> sleepMs(int ms) =>
     Future<void>.delayed(Duration(milliseconds: ms));
@@ -422,26 +426,50 @@ String rangeA1ZZ(String title, int startRow, int endRow) =>
 String rangeWholeSheet(String title) =>
     "'${escapeSheetTitleForRange(title)}'!A:ZZ";
 
-/// ERP `fetchSheetValuesBatched`.
+/// ERP `fetchSheetValuesBatched`, without ERP's 150,000-row cap (the
+/// owner asked for no row limit).
+///
+/// Bug fix: Google drops empty rows at the end of each range, so ERP
+/// stopped at the first short batch and missed every row after a gap of
+/// empty rows on a batch boundary. With the sheet's [rowCount] every batch
+/// up to the end of the grid is read, and rows keep their positions.
 Future<List<List<String>>> fetchSheetValuesBatched(
   SheetsApi sheets,
   String spreadsheetId,
   String title, {
   int startRow = 1,
+  int? rowCount,
 }) async {
   final all = <List<String>>[];
   var row = startRow;
-  while (row <= sheetMaxRows) {
+  for (;;) {
+    if (rowCount != null && row > rowCount) break;
     final endRow = row + sheetBatchRows - 1;
     final batch = await withSheetsRetry(
       () => sheets.valuesGet(spreadsheetId, rangeA1ZZ(title, row, endRow)),
     );
-    if (batch.isEmpty) break;
-    all.addAll(batch);
-    if (batch.length < sheetBatchRows) break;
+    if (rowCount == null) {
+      if (batch.isEmpty) break;
+      all.addAll(batch);
+      if (batch.length < sheetBatchRows) break;
+    } else if (batch.isNotEmpty) {
+      // Keep positions: pad the empty rows skipped since the last batch.
+      while (all.length < row - startRow) {
+        all.add(<String>[]);
+      }
+      all.addAll(batch);
+    }
     row = endRow + 1;
   }
   return all;
+}
+
+/// Row count of [title] in [meta], when Google reported it.
+int? sheetRowCount(SpreadsheetMeta meta, String title) {
+  for (final s in meta.sheets) {
+    if (s.title == title) return s.rowCount;
+  }
+  return null;
 }
 
 class SheetFetchResult {
@@ -484,6 +512,7 @@ Future<SheetFetchResult> fetchSheetWithFallback(
         sheets,
         spreadsheetId,
         title,
+        rowCount: sheetRowCount(meta, title),
       );
       if (values.length > best.values.length) {
         best = SheetFetchResult(values, title);
@@ -504,6 +533,7 @@ Future<SheetFetchResult> fetchSheetWithFallback(
       sheets,
       spreadsheetId,
       toTry.first,
+      rowCount: sheetRowCount(meta, toTry.first),
     );
     return SheetFetchResult(values, toTry.first);
   } catch (_) {}

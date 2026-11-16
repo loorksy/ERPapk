@@ -151,9 +151,9 @@ class SearchService {
     if (queryId.isEmpty) {
       return const SearchOutcome.fail('رقم المستخدم غير صالح');
     }
-    final cycle = await db.getCycle(cycleId);
+    final cycle = await db.getCycleInfo(cycleId);
     if (cycle == null) return const SearchOutcome.fail('الدورة غير موجودة');
-    if (await db.getCycleCache(cycle.id) == null) {
+    if (!await db.hasCycleCache(cycle.id)) {
       return const SearchOutcome.fail(
         'لم يتم مزامنة الدورة بعد. انتظر المزامنة الخلفية أو نفّذ التدقيق من قسم الرواتب.',
       );
@@ -203,7 +203,7 @@ class SearchService {
 
   /// ERP `GET /cycle-sheets`: sheets of the cycle's management spreadsheet.
   Future<List<String>> cycleSheets(int cycleId) async {
-    final cycle = await db.getCycle(cycleId);
+    final cycle = await db.getCycleInfo(cycleId);
     if (cycle == null) return const [];
     if (cycle.managementSpreadsheetId != null) {
       final meta = await withSheetsRetry(
@@ -258,7 +258,7 @@ class SearchService {
         'اختر الدورة وأدخل رقم المستخدم أولاً',
       );
     }
-    final cycle = await db.getCycle(cycleId);
+    final cycle = await db.getCycleInfo(cycleId);
     if (cycle == null) {
       return const IndividualAuditResult(false, 'الدورة غير موجودة');
     }

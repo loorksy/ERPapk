@@ -108,7 +108,7 @@ class CycleService {
     required String? agentSheetName,
     double? transferDiscountPct,
   }) async {
-    final existing = await db.getCycle(id);
+    final existing = await db.getCycleInfo(id);
     if (existing == null) throw Exception('الدورة غير موجودة');
     var mRows = managementRows;
     var aRows = agentRows;
@@ -154,7 +154,7 @@ class CycleService {
     String? userInfoSpreadsheetId,
     String? userInfoSheetName,
   ) async {
-    final cycle = await db.getCycle(id);
+    final cycle = await db.getCycleInfo(id);
     if (cycle == null) return const SyncOutcome(false, 'الدورة غير موجودة');
     final mgmtSsId = cycle.managementSpreadsheetId;
     final agentSsId = cycle.agentSpreadsheetId;

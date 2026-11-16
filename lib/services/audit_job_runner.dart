@@ -76,8 +76,9 @@ class AuditJobRunner {
   Future<bool> runJob(AuditJob job) async {
     final request = PayrollRequest.fromJson(job.request);
     AuditPlan? plan;
-    if (job.plan != null) {
-      plan = AuditPlan.fromJson(job.plan!)..next = job.stepNext;
+    final saved = await db.getAuditJobPlan(job.id);
+    if (saved != null) {
+      plan = AuditPlan.fromJson(saved)..next = job.stepNext;
     }
     Future<void> progress(String m) async {
       await db.updateAuditJob(job.id, {'progress': m});

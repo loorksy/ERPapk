@@ -53,7 +53,11 @@ class FakeSheets implements SheetsApi {
     return SpreadsheetMeta(
       spreadsheetId: id,
       spreadsheetUrl: 'https://x/$id',
-      sheets: [for (final t in b.keys) SheetProps(ids[id]![t]!, t)],
+      sheets: [
+        // Like Google, the grid is a little larger than the data.
+        for (final t in b.keys)
+          SheetProps(ids[id]![t]!, t, 26, b[t]!.length + 20),
+      ],
     );
   }
 

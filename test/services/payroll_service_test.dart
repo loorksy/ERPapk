@@ -1,6 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lork_audit_standalone/data/app_database.dart';
 import 'package:lork_audit_standalone/erp/payroll_audit_engine.dart';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:lork_audit_standalone/google/sheets_client.dart';
 import 'package:lork_audit_standalone/services/audit_job_runner.dart';
 import 'package:lork_audit_standalone/services/cycle_service.dart';
 import 'package:lork_audit_standalone/services/cycle_sync_worker.dart';
@@ -334,9 +338,146 @@ void main() {
         2: '#8b5cf6',
         3: '#facc15',
       });
-      final result = PayrollResult.fromJson(job.result!);
+      final result = PayrollResult.fromJson(
+        (await db.getAuditJobResult(jobId))!,
+      );
       expect(result.success, isTrue);
       expect((await db.getCycleCache(id))!.auditedAgentIds, {'1001', '1002'});
     },
   );
+
+  test('agent-sheet users not audited yet (id from A, name from C)', () async {
+    final id = await linkedCycle();
+    await payroll.execute(request(id));
+    final pending = await payroll.unauditedAgentMembers(id);
+    expect(pending.agentTotal, 3);
+    expect([for (final m in pending.members) m.id], ['1007']);
+    expect(pending.members.single.row, 5);
+  });
+
+  test('large snapshots (> 2 MB, emoji on chunk edges) round-trip', () async {
+    final big = [
+      ['رقم المستخدم', 'الاسم', 'الوكالة'],
+      for (var i = 0; i < 40000; i++)
+        ['${100000 + i}', '𝐑𝐌𝐖𝐒𝐇𝐀 🧿 سارة $i', 'الشمال'],
+    ];
+    expect(utf8.encode(jsonEncode(big)).length > 2 * 1024 * 1024, isTrue);
+    final id = await db.insertCycle(
+      name: 'كبيرة',
+      managementRows: big,
+      agentRows: big,
+    );
+    final cycle = await db.getCycle(id);
+    expect(jsonEncode(cycle!.managementRows), jsonEncode(big));
+    expect(cycle.managementCount, big.length);
+    final light = (await db.listCycles()).firstWhere((c) => c.id == id);
+    expect(light.managementRows, isEmpty);
+    expect(light.agentCount, big.length);
+
+    // A surrogate pair exactly on a chunk boundary stays intact.
+    final edge = '${'x' * (AppDatabase.blobChunk - 1)}🧿tail';
+    await db.putBlob('t/edge', edge);
+    expect(await db.getBlob('t/edge'), edge);
+  });
+
+  test('reading a sheet keeps rows after empty rows on a batch edge', () async {
+    final rows = <List<String>>[
+      for (var i = 1; i <= 12000; i++)
+        (i >= 4990 && i <= 5010) ? <String>[] : ['$i', 'x'],
+    ];
+    fake.add('big', 'S', rows);
+    final meta = await fake.getSpreadsheet('big');
+    final read = await fetchSheetValuesBatched(
+      fake,
+      'big',
+      'S',
+      rowCount: sheetRowCount(meta, 'S'),
+    );
+    expect(read.length, 12000);
+    expect(read[4988], ['4989', 'x']);
+    expect(read[5010], ['5011', 'x']);
+    expect(read.last, ['12000', 'x']);
+  });
+
+  test('upgrading from schema 3 moves the stored sheets', () async {
+    final dir = Directory.systemTemp.createTempSync('erp_v3');
+    final path = '${dir.path}/old.db';
+    final old = await databaseFactoryFfiNoIsolate.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 3,
+        onCreate: (d, _) async {
+          await d.execute('''CREATE TABLE financial_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+            management_data TEXT, agent_data TEXT,
+            management_spreadsheet_id TEXT, management_sheet_name TEXT,
+            agent_spreadsheet_id TEXT, agent_sheet_name TEXT,
+            transfer_discount_pct REAL NOT NULL DEFAULT 0,
+            user_info_data TEXT, user_info_spreadsheet_id TEXT,
+            user_info_sheet_name TEXT, payroll_audit_user_info_hash TEXT,
+            payroll_audit_closed_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''');
+          await d.execute('''CREATE TABLE payroll_cycle_cache (
+            cycle_id INTEGER PRIMARY KEY, management_data TEXT,
+            agent_data TEXT, management_sheet_name TEXT,
+            agent_sheet_name TEXT, audited_agent_ids TEXT,
+            audited_mgmt_ids TEXT, found_in_target_sheet_ids TEXT,
+            synced_at TEXT NOT NULL, stale_after TEXT)''');
+          await d.execute('''CREATE TABLE local_workbooks (
+            cycle_id INTEGER PRIMARY KEY, state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL)''');
+          await d.execute('''CREATE TABLE audit_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, cycle_id INTEGER NOT NULL,
+            status TEXT NOT NULL, request_json TEXT NOT NULL,
+            plan_json TEXT, step_next INTEGER NOT NULL DEFAULT 0,
+            step_total INTEGER NOT NULL DEFAULT 0, progress TEXT,
+            error TEXT, result_json TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            seen INTEGER NOT NULL DEFAULT 0, lease_owner TEXT,
+            lease_until TEXT, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL)''');
+          for (final t in const [
+            'CREATE TABLE payroll_settings (id INTEGER PRIMARY KEY)',
+            'CREATE TABLE payroll_cycle_columns (cycle_id INTEGER PRIMARY KEY)',
+            'CREATE TABLE payroll_user_audit_cache (cycle_id INTEGER, member_user_id TEXT)',
+            'CREATE TABLE audit_runs (id INTEGER PRIMARY KEY)',
+            'CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)',
+          ]) {
+            await d.execute(t);
+          }
+        },
+      ),
+    );
+    final now = DateTime.now().toIso8601String();
+    await old.insert('financial_cycles', {
+      'id': 1,
+      'name': 'قديمة',
+      'management_data': jsonEncode(mgmt),
+      'agent_data': jsonEncode(agent),
+      'created_at': now,
+      'updated_at': now,
+    });
+    await old.insert('payroll_cycle_cache', {
+      'cycle_id': 1,
+      'management_data': jsonEncode(mgmt),
+      'agent_data': jsonEncode(agent),
+      'audited_agent_ids': '["1001"]',
+      'audited_mgmt_ids': '[]',
+      'synced_at': now,
+    });
+    await old.close();
+
+    final upgraded = await AppDatabase.open(
+      path: path,
+      factory: databaseFactoryFfiNoIsolate,
+    );
+    final cycle = await upgraded.getCycle(1);
+    expect(cycle!.managementRows, mgmt);
+    expect(cycle.agentRows, agent);
+    expect(cycle.managementCount, mgmt.length);
+    final cache = await upgraded.getCycleCache(1);
+    expect(cache!.agentData, agent);
+    expect(cache.auditedAgentIds, {'1001'});
+    await upgraded.close();
+  });
 }

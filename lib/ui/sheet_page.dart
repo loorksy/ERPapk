@@ -339,7 +339,7 @@ class _SheetPageState extends State<SheetPage> {
                 ],
                 const SizedBox(height: 8),
                 Text(
-                  'الإدارة: ${c.managementRows.length} صف · الوكيل: ${c.agentRows.length} صف',
+                  'الإدارة: ${c.managementCount} صف · الوكيل: ${c.agentCount} صف',
                   style: const TextStyle(fontSize: 12, color: Tw.slate500),
                 ),
               ],

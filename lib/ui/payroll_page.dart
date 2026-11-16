@@ -22,6 +22,7 @@ import '../services/payroll_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'spreadsheet_link.dart';
+import 'unaudited_dialog.dart';
 
 const _draftKey = 'payrollAuditDraftV1';
 const _localSource = '__local_file__';
@@ -82,9 +83,15 @@ class _PayrollPageState extends State<PayrollPage> {
   bool _running = false;
   String? _progress;
   AuditJob? _job;
+
+  /// Result saved by the running job once prepared (duplicates list),
+  /// read once per job instead of on every progress refresh.
+  PayrollResult? _jobResult;
+  int? _jobResultFor;
   Timer? _poll;
   PayrollResult? _result;
   bool _exporting = false;
+  bool _loadingPending = false;
 
   AppServices get _s => AppScope.read(context);
 
@@ -227,7 +234,9 @@ class _PayrollPageState extends State<PayrollPage> {
   }
 
   Future<void> _loadCycleColumns() async {
-    final cycle = _cycle;
+    if (_cycle == null) return;
+    // The list holds light records; the header rows need the snapshot.
+    final cycle = await _s.db.getCycle(_cycle!.id);
     if (cycle == null) return;
     // ERP `payrollLoadCycleColumns`: letters up to the widest first row (at
     // least 26), labelled with the header row for Google-linked cycles, and
@@ -276,7 +285,7 @@ class _PayrollPageState extends State<PayrollPage> {
 
   Future<void> _refreshSession() async {
     final cycle =
-        _cycleId.isEmpty ? null : await _s.db.getCycle(int.parse(_cycleId));
+        _cycleId.isEmpty ? null : await _s.db.getCycleInfo(int.parse(_cycleId));
     if (!mounted) return;
     setState(
       () => _sessionClosed = cycle == null ? null : cycle.auditClosedAt != null,
@@ -675,6 +684,13 @@ class _PayrollPageState extends State<PayrollPage> {
     final job = await _s.db.getAuditJob(current.id);
     if (!mounted || job == null) return;
     setState(() => _job = job);
+    if (job.active && job.stepTotal > 0 && _jobResultFor != job.id) {
+      _jobResultFor = job.id;
+      final json = await _s.db.getAuditJobResult(job.id);
+      if (mounted && json != null) {
+        setState(() => _jobResult = PayrollResult.fromJson(json));
+      }
+    }
     if (!job.active) {
       _poll?.cancel();
       await _settleJob(job);
@@ -689,7 +705,8 @@ class _PayrollPageState extends State<PayrollPage> {
 
   /// A finished job: announce it once, and keep showing its result.
   Future<void> _settleJob(AuditJob job) async {
-    final json = job.result;
+    final json = await _s.db.getAuditJobResult(job.id);
+    if (!mounted) return;
     final result = json == null ? null : PayrollResult.fromJson(json);
     if (!job.seen) {
       await _s.db.updateAuditJob(job.id, {'seen': 1});
@@ -717,9 +734,9 @@ class _PayrollPageState extends State<PayrollPage> {
     final total = job.stepTotal;
     final done = job.stepNext.clamp(0, total);
     final duplicates =
-        job.result == null
-            ? const <DuplicateGroup>[]
-            : PayrollResult.fromJson(job.result!).duplicates;
+        _jobResultFor == job.id && _jobResult != null
+            ? _jobResult!.duplicates
+            : const <DuplicateGroup>[];
     return NoticeBox(
       bg: waiting ? Tw.amber50 : Tw.indigo50,
       border: waiting ? Tw.amber200 : Tw.indigo200,
@@ -849,6 +866,21 @@ class _PayrollPageState extends State<PayrollPage> {
         ],
       ),
     );
+  }
+
+  /// Owner's request: agent-sheet ids not audited yet, on demand (read only).
+  Future<void> _showUnaudited() async {
+    if (_cycleId.isEmpty) return;
+    setState(() => _loadingPending = true);
+    try {
+      final data = await _s.payroll.unauditedAgentMembers(int.parse(_cycleId));
+      if (!mounted) return;
+      await showUnauditedDialog(context, data);
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), ToastType.error);
+    } finally {
+      if (mounted) setState(() => _loadingPending = false);
+    }
   }
 
   Future<void> _resumeNow() async {
@@ -1386,8 +1418,19 @@ class _PayrollPageState extends State<PayrollPage> {
             ),
           ),
         ],
+        const SizedBox(height: 16),
+        ErpButton(
+          label: 'عرض غير المدققين في ورقة الوكيل',
+          icon: FontAwesomeIcons.userClock,
+          kind: ErpButtonKind.outline,
+          loading: _loadingPending,
+          loadingLabel: 'جاري التحميل...',
+          height: 42,
+          fontSize: 13,
+          onPressed: _showUnaudited,
+        ),
         if (r.localOnly) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
           ErpButton(
             label: 'تصدير النتائج إلى Excel',
             icon: FontAwesomeIcons.fileExport,

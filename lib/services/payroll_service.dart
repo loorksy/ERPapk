@@ -147,8 +147,13 @@ class PayrollService {
         requestedTitle.isNotEmpty
             ? requestedTitle
             : (firstSheet?.title ?? 'Sheet1');
-    final allRows = await withSheetsRetry(
-      () => sheets.valuesGet(spreadsheetId, rangeWholeSheet(mainSheetTitle)),
+    // ERP reads 'title'!A:ZZ in one request; reading in batches gives the
+    // same rows and works for sheets of any size.
+    final allRows = await fetchSheetValuesBatched(
+      sheets,
+      spreadsheetId,
+      mainSheetTitle,
+      rowCount: sheetRowCount(meta, mainSheetTitle),
     );
     final spreadsheetUrl = meta.url;
 
@@ -318,12 +323,15 @@ class PayrollService {
       await _finishPlan(plan);
       return;
     }
-    final cycle = await db.getCycle(plan.cycleId);
-    if (cycle == null) throw Exception('الدورة المالية غير موجودة');
+    // Light record (links and sheet names); the data only where needed.
+    final info = await db.getCycleInfo(plan.cycleId);
+    if (info == null) throw Exception('الدورة المالية غير موجودة');
+    var cycle = info;
     final sheets = sheetsProvider();
     switch (kind) {
       case 'createCycleSpreadsheet':
         if (cycle.linkedToGoogle) return; // already done before a restart
+        cycle = (await db.getCycle(plan.cycleId))!;
         final cycleName =
             cycle.name.trim().isEmpty ? 'دورة' : cycle.name.trim();
         final dateStr = DateTime.now().toIso8601String().substring(0, 10);
@@ -333,13 +341,24 @@ class PayrollService {
             'الوكيل',
           ]),
         );
-        await withSheetsRetry(
-          () =>
-              sheets.valuesUpdate(newId, "'الإدارة'!A1", cycle.managementRows),
-        );
-        await withSheetsRetry(
-          () => sheets.valuesUpdate(newId, "'الوكيل'!A1", cycle.agentRows),
-        );
+        for (final (title, rows) in [
+          ('الإدارة', cycle.managementRows),
+          ('الوكيل', cycle.agentRows),
+        ]) {
+          for (var i = 0; i < rows.length; i += copyChunkRows) {
+            final end =
+                i + copyChunkRows > rows.length
+                    ? rows.length
+                    : i + copyChunkRows;
+            await withSheetsRetry(
+              () => sheets.valuesUpdate(
+                newId,
+                "'$title'!A${i + 1}",
+                rows.sublist(i, end),
+              ),
+            );
+          }
+        }
         await db.updateCycle(cycle.id, {
           'management_spreadsheet_id': newId,
           'management_sheet_name': 'الإدارة',
@@ -376,16 +395,32 @@ class PayrollService {
       case 'copy':
         await _copyStep(cycle, step, index, plan);
       case 'values':
-        await withSheetsRetry(
-          () => sheets.valuesUpdate(
-            step['ss'] as String,
-            step['range'] as String,
-            [
-              for (final r in (step['values'] as List))
-                List<Object?>.from(r as List),
-            ],
-          ),
-        );
+        // One column, rows minRow..maxRow; very long columns are written in
+        // parts (each part overwrites the same cells if repeated).
+        final m =
+            RegExp(
+              r"^(.*)!([A-Z]+)(\d+):([A-Z]+)(\d+)$",
+            ).firstMatch(step['range'] as String)!;
+        final prefix = m.group(1)!;
+        final col = m.group(2)!;
+        final first = int.parse(m.group(3)!);
+        final values = [
+          for (final r in (step['values'] as List))
+            List<Object?>.from(r as List),
+        ];
+        for (var i = 0; i < values.length; i += valuesChunkRows) {
+          final end =
+              i + valuesChunkRows > values.length
+                  ? values.length
+                  : i + valuesChunkRows;
+          await withSheetsRetry(
+            () => sheets.valuesUpdate(
+              step['ss'] as String,
+              '$prefix!$col${first + i}:$col${first + end - 1}',
+              values.sublist(i, end),
+            ),
+          );
+        }
       case 'color':
         final isMgmt = step['sheetOf'] == 'management';
         final ssId =
@@ -421,6 +456,8 @@ class PayrollService {
   }
 
   static const colorBatchSize = 5000;
+  static const valuesChunkRows = 20000;
+  static const copyChunkRows = 5000;
 
   /// Copies rows to one target sheet. The target is read first, so an id
   /// already there (earlier run, manual paste, or a copy whose reply was
@@ -456,19 +493,29 @@ class PayrollService {
     ];
     if (values.isEmpty) return;
     try {
-      if (sheetRows.isNotEmpty) {
-        await withSheetsRetry(
-          () =>
-              sheets.valuesAppend(mgmtSsId, rangeWholeSheet(sheetName), values),
+      // Very large copies go in parts; a repeated step re-reads the sheet
+      // above, so parts already written are skipped.
+      var empty = sheetRows.isEmpty;
+      for (var i = 0; i < values.length; i += copyChunkRows) {
+        final part = values.sublist(
+          i,
+          i + copyChunkRows > values.length ? values.length : i + copyChunkRows,
         );
-      } else {
-        await withSheetsRetry(
-          () => sheets.valuesUpdate(
-            mgmtSsId,
-            "'${escapeSheetTitleForRange(sheetName)}'!A1",
-            values,
-          ),
-        );
+        if (!empty) {
+          await withSheetsRetry(
+            () =>
+                sheets.valuesAppend(mgmtSsId, rangeWholeSheet(sheetName), part),
+          );
+        } else {
+          await withSheetsRetry(
+            () => sheets.valuesUpdate(
+              mgmtSsId,
+              "'${escapeSheetTitleForRange(sheetName)}'!A1",
+              part,
+            ),
+          );
+          empty = false;
+        }
       }
     } on SheetsApiException catch (e) {
       if (e.transient) rethrow;
@@ -670,6 +717,43 @@ class PayrollService {
     });
     await db.addAuditRun(cycle.id, 'local', result.toLog());
     return result;
+  }
+
+  // ======================================================================
+  // Agent-sheet users not audited yet (owner's request, read only)
+  // ======================================================================
+
+  /// Agent name column requested by the owner (column C).
+  static const agentNameColumn = 2;
+
+  /// Users of the cycle's agent sheet (as synced by the last audit) with no
+  /// «مدقق» status in this cycle — from the bulk audit, earlier runs or the
+  /// selective audit. Each id once, with its name from column C.
+  Future<PendingAgentMembers> unauditedAgentMembers(int cycleId) async {
+    final cycle = await db.getCycle(cycleId);
+    if (cycle == null) return const PendingAgentMembers([], 0);
+    final cols = await db.getCycleColumns(cycleId);
+    final idIdx = columnLetterToIndex(cols.agentUserIdCol) ?? 0;
+    final rows = cycle.agentRows;
+    final start = rows.isNotEmpty && isHeaderRowCycle(rows[0], idIdx) ? 1 : 0;
+    final audited = {
+      ...await db.auditedMemberIds(cycleId),
+      ...await db.cacheAuditedIds(cycleId),
+    };
+    final seen = <String>{};
+    final members = <PendingMember>[];
+    for (var i = start; i < rows.length; i++) {
+      final id = normalizeUserId(cellAt(rows[i], idIdx));
+      if (id.isEmpty || !seen.add(id) || audited.contains(id)) continue;
+      members.add(
+        PendingMember(
+          id,
+          (cellAt(rows[i], agentNameColumn) ?? '').trim(),
+          i + 1,
+        ),
+      );
+    }
+    return PendingAgentMembers(members, seen.length);
   }
 
   // ======================================================================

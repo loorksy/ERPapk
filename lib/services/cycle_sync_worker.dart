@@ -57,8 +57,7 @@ class CycleSyncWorker {
       for (final cycle in await db.listCycles()) {
         if (!cycle.linkedToGoogle) continue;
         try {
-          final existing = await db.getCycleCache(cycle.id);
-          final staleAfter = existing?.staleAfter;
+          final staleAfter = await db.cacheStaleAfter(cycle.id);
           if (staleAfter != null && staleAfter.isAfter(DateTime.now())) {
             continue;
           }
