@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
@@ -52,18 +53,14 @@ Future<ImportedFile?> pickSpreadsheetFile() async {
 ImportedFile parseSpreadsheetBytes(String name, Uint8List bytes) {
   final lower = name.toLowerCase();
   if (lower.endsWith('.csv')) {
-    ImportedSheet sheet;
+    String text;
     try {
-      sheet = ImportService.decodeCsv(bytes);
+      text = utf8.decode(bytes);
     } on FormatException {
-      sheet = ImportService.decodeCsv(bytes, encoding: 'windows-1256');
+      // ERP reads UTF-8 only; Arabic Excel CSVs are often Windows-1256.
+      text = ImportService.decodeText(bytes, 'windows-1256');
     }
-    // ERP drops blank lines and trims every cell of an uploaded CSV.
-    final rows = [
-      for (final r in sheet.rows)
-        if (r.any((c) => c.trim().isNotEmpty)) [for (final c in r) c.trim()],
-    ];
-    return ImportedFile(name, {'CSV': rows});
+    return ImportedFile(name, {'CSV': parseCsvLikeErp(text)});
   }
   if (lower.endsWith('.xls')) {
     throw const FileImportException(
@@ -111,4 +108,30 @@ String _cellText(CellValue? value) {
 String _double(double v) {
   if (v == v.roundToDouble() && v.abs() < 1e15) return v.toInt().toString();
   return v.toString();
+}
+
+/// ERP `parseUploadedFile` for CSV (routes/sheet.js): split lines, drop
+/// blank ones, a quote toggles quoting, comma (outside quotes) or tab ends
+/// a cell, cells are trimmed.
+List<List<String>> parseCsvLikeErp(String text) {
+  final rows = <List<String>>[];
+  for (final line in text.split(RegExp(r'\r?\n'))) {
+    if (line.trim().isEmpty) continue;
+    final out = <String>[];
+    final cell = StringBuffer();
+    var inQuotes = false;
+    for (final unit in line.codeUnits) {
+      if (unit == 0x22) {
+        inQuotes = !inQuotes;
+      } else if ((unit == 0x2c && !inQuotes) || unit == 0x09) {
+        out.add(cell.toString().trim());
+        cell.clear();
+      } else {
+        cell.writeCharCode(unit);
+      }
+    }
+    out.add(cell.toString().trim());
+    rows.add(out);
+  }
+  return rows;
 }

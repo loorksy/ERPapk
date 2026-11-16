@@ -103,6 +103,7 @@ class CycleCache {
     required this.auditedAgentIds,
     required this.auditedMgmtIds,
     required this.foundInTargetSheetIds,
+    this.staleAfter,
   });
   final Rows managementData;
   final Rows agentData;
@@ -111,6 +112,10 @@ class CycleCache {
   final Set<String> auditedAgentIds;
   final Set<String> auditedMgmtIds;
   final Set<String> foundInTargetSheetIds;
+
+  /// ERP `stale_after`: the background sync skips the cycle until then.
+  /// Null (as saved by an audit) means "refresh on the next sync".
+  final DateTime? staleAfter;
 }
 
 class UserAuditStatus {
@@ -158,7 +163,7 @@ class AuditRun {
 class AppDatabase {
   AppDatabase._(this._db);
   final Database _db;
-  static const schemaVersion = 1;
+  static const schemaVersion = 2;
 
   static Future<AppDatabase> open({
     String? path,
@@ -172,6 +177,13 @@ class AppDatabase {
         version: schemaVersion,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, version) => _create(db),
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              'ALTER TABLE payroll_cycle_cache ADD COLUMN stale_after TEXT',
+            );
+          }
+        },
       ),
     );
     return AppDatabase._(db);
@@ -216,7 +228,8 @@ class AppDatabase {
       audited_agent_ids TEXT,
       audited_mgmt_ids TEXT,
       found_in_target_sheet_ids TEXT,
-      synced_at TEXT NOT NULL)''');
+      synced_at TEXT NOT NULL,
+      stale_after TEXT)''');
     await db.execute('''CREATE TABLE payroll_user_audit_cache (
       cycle_id INTEGER NOT NULL REFERENCES financial_cycles(id) ON DELETE CASCADE,
       member_user_id TEXT NOT NULL,
@@ -401,6 +414,7 @@ class AppDatabase {
       auditedAgentIds: ids(r['audited_agent_ids']),
       auditedMgmtIds: ids(r['audited_mgmt_ids']),
       foundInTargetSheetIds: ids(r['found_in_target_sheet_ids']),
+      staleAfter: DateTime.tryParse((r['stale_after'] ?? '').toString()),
     );
   }
 
@@ -417,6 +431,7 @@ class AppDatabase {
           c.foundInTargetSheetIds.toList(),
         ),
         'synced_at': _now(),
+        'stale_after': c.staleAfter?.toIso8601String(),
       }, conflictAlgorithm: ConflictAlgorithm.replace);
 
   // ---------------------------------------------------------- user status

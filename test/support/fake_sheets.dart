@@ -171,4 +171,26 @@ class FakeSheets implements SheetsApi {
     }
     return id;
   }
+
+  @override
+  Future<List<Map<String, dynamic>?>> columnBackgrounds(
+    String spreadsheetId,
+    String sheetTitle,
+    String column,
+    int rowCount,
+  ) async {
+    log.add('GET colors $spreadsheetId $sheetTitle');
+    final byRow =
+        colors['$spreadsheetId|${ids[spreadsheetId]![sheetTitle]}'] ?? {};
+    return [
+      for (var i = 0; i < rowCount; i++)
+        byRow[i] == null
+            ? {'red': 1, 'green': 1, 'blue': 1}
+            : {
+              'red': int.parse(byRow[i]!.substring(1, 3), radix: 16) / 255,
+              'green': int.parse(byRow[i]!.substring(3, 5), radix: 16) / 255,
+              'blue': int.parse(byRow[i]!.substring(5, 7), radix: 16) / 255,
+            },
+    ];
+  }
 }

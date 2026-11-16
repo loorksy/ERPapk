@@ -81,7 +81,6 @@ class _PayrollPageState extends State<PayrollPage> {
   bool _running = false;
   String? _progress;
   PayrollResult? _result;
-  String? _errorText;
   bool _exporting = false;
 
   AppServices get _s => AppScope.read(context);
@@ -225,28 +224,36 @@ class _PayrollPageState extends State<PayrollPage> {
   Future<void> _loadCycleColumns() async {
     final cycle = _cycle;
     if (cycle == null) return;
-    final saved = await _s.db.getCycleColumns(cycle.id);
-    final mgmtHeader =
+    // ERP `payrollLoadCycleColumns`: letters up to the widest first row (at
+    // least 26), labelled with the header row for Google-linked cycles, and
+    // reset to A / A / D.
+    final mgmtFirst =
         cycle.managementRows.isEmpty
             ? const <String>[]
             : cycle.managementRows.first;
-    final agentHeader =
+    final agentFirst =
         cycle.agentRows.isEmpty ? const <String>[] : cycle.agentRows.first;
+    final width = [
+      26,
+      mgmtFirst.length,
+      agentFirst.length,
+    ].reduce((a, b) => a > b ? a : b);
+    final fallback = [
+      for (var i = 0; i < width; i++) ColumnOption(columnIndexToLetter(i), ''),
+    ];
     if (!mounted) return;
     setState(() {
-      _cycleMgmtCols = CycleService.columnsFromHeader(mgmtHeader);
-      _cycleAgentCols = CycleService.columnsFromHeader(agentHeader);
-      _cycleMgmtUserIdCol = _pickCol(_cycleMgmtCols, saved.mgmtUserIdCol, 'A');
-      _cycleAgentUserIdCol = _pickCol(
-        _cycleAgentCols,
-        saved.agentUserIdCol,
-        'A',
-      );
-      _cycleAgentSalaryCol = _pickCol(
-        _cycleAgentCols,
-        saved.agentSalaryCol,
-        'D',
-      );
+      _cycleMgmtCols =
+          cycle.linkedToGoogle
+              ? CycleService.columnsFromHeader(mgmtFirst)
+              : fallback;
+      _cycleAgentCols =
+          cycle.linkedToGoogle
+              ? CycleService.columnsFromHeader(agentFirst)
+              : fallback;
+      _cycleMgmtUserIdCol = _pickCol(_cycleMgmtCols, 'A', 'A');
+      _cycleAgentUserIdCol = _pickCol(_cycleAgentCols, 'A', 'A');
+      _cycleAgentSalaryCol = _pickCol(_cycleAgentCols, 'D', 'D');
     });
   }
 
@@ -507,7 +514,10 @@ class _PayrollPageState extends State<PayrollPage> {
 
   // ----------------------------------------------------------------- run
 
-  Future<void> _runAudit({bool force = false}) async {
+  /// ERP `payrollRunAudit`: 1/2 sync (cycle + user-info snapshot), then
+  /// 2/2 `payroll-execute`. A file from the phone runs the same audit
+  /// locally instead.
+  Future<void> _runAudit() async {
     if (_cycleId.isEmpty || _spreadsheetId.isEmpty) {
       showToast(
         context,
@@ -535,9 +545,7 @@ class _PayrollPageState extends State<PayrollPage> {
         _spreadsheetId,
         _userInfoSheet.isEmpty ? null : _userInfoSheet,
       );
-      if (!force && !await _confirmGoogleWrite()) return;
     }
-    if (!mounted) return;
     final cycleId = int.parse(_cycleId);
     await _s.db.saveCycleColumns(
       cycleId,
@@ -547,44 +555,71 @@ class _PayrollPageState extends State<PayrollPage> {
         agentSalaryCol: _cycleAgentSalaryCol,
       ),
     );
-    final rawDiscount = _discount.text.trim();
-    final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
+    if (!mounted) return;
     setState(() {
       _running = true;
       _progress =
           source is LocalUserInfo ? 'تدقيق على الهاتف...' : '1/2 مزامنة...';
-      _errorText = null;
     });
-    final result = await _s.payroll.execute(
-      PayrollRequest(
-        cycleId: cycleId,
-        userInfo: source,
-        discountRate: parsed == null || parsed.isNaN ? null : parsed,
-        agentColor: _agentColor,
-        managementColor: _mgmtColor,
-        columns: AuditColumns.of(
-          userInfoUserIdCol: _userInfoUserIdCol,
-          userInfoTitleCol: _userInfoTitleCol,
-          userInfoSalaryCol: _userInfoSalaryCol,
-          cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
-          cycleAgentUserIdCol: _cycleAgentUserIdCol,
-          cycleAgentSalaryCol: _cycleAgentSalaryCol,
+    try {
+      if (source is GoogleUserInfo) {
+        // ERP `payrollSyncForAudit`: the audit stops if this sync fails.
+        final sync = await _s.cycles.syncCycle(
+          cycleId,
+          userInfoSpreadsheetId: source.spreadsheetId,
+          userInfoSheetName: source.sheetName,
+        );
+        if (!mounted) return;
+        if (!sync.success) {
+          showToast(context, sync.message, ToastType.error);
+          return;
+        }
+        showToast(
+          context,
+          sync.detail == null
+              ? sync.message
+              : '${sync.message} — ${sync.detail}',
+          ToastType.success,
+        );
+        setState(() => _progress = '2/2 تطبيق...');
+      }
+      final rawDiscount = _discount.text.trim();
+      final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
+      final result = await _s.payroll.execute(
+        PayrollRequest(
+          cycleId: cycleId,
+          userInfo: source,
+          discountRate: parsed == null || parsed.isNaN ? null : parsed,
+          agentColor: _agentColor,
+          managementColor: _mgmtColor,
+          columns: AuditColumns.of(
+            userInfoUserIdCol: _userInfoUserIdCol,
+            userInfoTitleCol: _userInfoTitleCol,
+            userInfoSalaryCol: _userInfoSalaryCol,
+            cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
+            cycleAgentUserIdCol: _cycleAgentUserIdCol,
+            cycleAgentSalaryCol: _cycleAgentSalaryCol,
+          ),
+          userInfoStatusCol:
+              _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
         ),
-        userInfoStatusCol:
-            _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
-        forceReaudit: force,
-      ),
-      onProgress: (m) {
-        if (mounted) setState(() => _progress = m);
-      },
-    );
-    if (!mounted) return;
-    setState(() {
-      _running = false;
-      _progress = null;
-    });
-    _s.cyclesChanged();
-    if (result.success) {
+        onProgress: (m) {
+          if (!mounted) return;
+          setState(
+            () =>
+                _progress =
+                    source is LocalUserInfo
+                        ? m
+                        : (m.startsWith('1/2') ? '2/2 تطبيق...' : m),
+          );
+        },
+      );
+      if (!mounted) return;
+      _s.cyclesChanged();
+      if (!result.success) {
+        showToast(context, result.message, ToastType.error);
+        return;
+      }
       setState(() => _result = result);
       var toast = result.message;
       if (result.cycleSynced && !toast.contains('تمت مزامنة جداول الدورة')) {
@@ -595,105 +630,16 @@ class _PayrollPageState extends State<PayrollPage> {
         toast,
         result.applied ? ToastType.success : ToastType.warning,
       );
+      await _refreshSession();
       _saveDraft();
-      return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _running = false;
+          _progress = null;
+        });
+      }
     }
-    if (result.unchanged) {
-      final again = await showDialog<bool>(
-        context: context,
-        builder:
-            (ctx) => Directionality(
-              textDirection: TextDirection.rtl,
-              child: AlertDialog(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                title: const Text(
-                  'لم يتغيّر جدول معلومات المستخدمين',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                content: Text(
-                  result.message,
-                  style: const TextStyle(fontSize: 14, height: 1.6),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('إلغاء'),
-                  ),
-                  FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Tw.emerald600,
-                    ),
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('إجبار إعادة التدقيق'),
-                  ),
-                ],
-              ),
-            ),
-      );
-      if (again == true && mounted) await _runAudit(force: true);
-      return;
-    }
-    setState(() => _errorText = result.message);
-    showToast(context, result.message, ToastType.error);
-  }
-
-  /// The bulk audit writes to the user's real spreadsheets, like ERP does.
-  Future<bool> _confirmGoogleWrite() async {
-    final cycle = _cycle;
-    final salary = _userInfoSalaryCol;
-    final status =
-        _userInfoStatusCol.isNotEmpty
-            ? _userInfoStatusCol
-            : columnIndexToLetter((columnLetterToIndex(salary) ?? 11) + 1);
-    String? ssName;
-    for (final f in _spreadsheets) {
-      if (f.id == _spreadsheetId) ssName = f.name;
-    }
-    final lines = <String>[
-      if (cycle != null && !cycle.linkedToGoogle)
-        '• إنشاء جدول Google جديد للدورة «${cycle.name}» ونسخ الإدارة والوكيل إليه.',
-      '• نسخ صفوف الإدارة المطابقة إلى أوراق الوجهة (عمود $_userInfoTitleCol) في جدول الإدارة.',
-      '• كتابة الراتب في العمود $salary والحالة في العمود $status في «${ssName ?? 'جدول معلومات المستخدمين'}».',
-      '• تلوين الصفوف المطابقة في ورقتي الإدارة والوكيل.',
-    ];
-    final ok = await showDialog<bool>(
-      context: context,
-      builder:
-          (ctx) => Directionality(
-            textDirection: TextDirection.rtl,
-            child: AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: const Text(
-                'تأكيد الكتابة على Google',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              content: Text(
-                'سيحسب الهاتف التدقيق ثم يكتب على Google كما يفعل النظام:\n\n${lines.join('\n')}',
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  height: 1.7,
-                  color: Tw.slate700,
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('إلغاء'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: Tw.emerald600),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('تدقيق'),
-                ),
-              ],
-            ),
-          ),
-    );
-    return ok == true;
   }
 
   Future<void> _export() async {
@@ -740,7 +686,7 @@ class _PayrollPageState extends State<PayrollPage> {
             _cycleSection(),
             if (_optionsVisible) _optionsSection(),
             _settingsSection(),
-            if (_result != null || _errorText != null) _resultsSection(),
+            if (_result != null) _resultsSection(),
           ],
         ),
       ),
@@ -767,13 +713,9 @@ class _PayrollPageState extends State<PayrollPage> {
                   ],
           value: _cycleId,
           onChanged: (v) {
-            setState(() {
-              _cycleId = v;
-              _result = null;
-              _errorText = null;
-            });
+            // ERP: changing the cycle refreshes the session and the draft.
+            setState(() => _cycleId = v);
             _refreshSession();
-            _loadCycleColumns();
             _saveDraft();
           },
         ),
@@ -860,7 +802,7 @@ class _PayrollPageState extends State<PayrollPage> {
                 ? 'التدقيق يتم على الهاتف، والنتائج تُحفظ في ملف Excel يمكنك تصديره.'
                 : linked
                 ? 'مزامنة اللقطات ثم كتابة النتائج والألوان في Google — التدقيق يُحسب على الهاتف.'
-                : 'الدورة من ملفات محلية: سيُنشأ لها جدول في Google عند التدقيق، كما في النظام.',
+                : 'الدورة من ملفات محلية: التدقيق على Google يحتاج دورة مرتبطة بجداول Google كما في النظام؛ يمكنك التدقيق من ملف على الجهاز.',
             style: const TextStyle(
               fontSize: 11.5,
               color: Tw.slate500,
@@ -1137,18 +1079,7 @@ class _PayrollPageState extends State<PayrollPage> {
   );
 
   Widget _resultContent() {
-    final error = _errorText;
     final r = _result;
-    if (error != null) {
-      return Text(
-        error,
-        style: const TextStyle(
-          color: Tw.red700,
-          fontWeight: FontWeight.w500,
-          height: 1.6,
-        ),
-      );
-    }
     if (r == null) return const SizedBox.shrink();
     final s = r.summary!;
     var msg = r.message;

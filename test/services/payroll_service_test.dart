@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lork_audit_standalone/data/app_database.dart';
 import 'package:lork_audit_standalone/erp/payroll_audit_engine.dart';
+import 'package:lork_audit_standalone/services/cycle_service.dart';
+import 'package:lork_audit_standalone/services/cycle_sync_worker.dart';
 import 'package:lork_audit_standalone/services/payroll_service.dart';
 import 'package:lork_audit_standalone/services/search_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -180,5 +182,63 @@ void main() {
     expect(state.mgmtColors, {1: '#8b5cf6', 2: '#8b5cf6', 3: '#facc15'});
     expect(state.userInfoRows![1][11], 100);
     expect(state.userInfoRows![1][12], 'سحب وكيل');
+  });
+
+  test('search reads only the cycle cache, like ERP', () async {
+    final id = await linkedCycle();
+    final before = await search.searchUser(id, '1001', 0);
+    expect(before.success, isFalse);
+    expect(before.message, contains('لم يتم مزامنة الدورة بعد'));
+    final all = await search.searchAcrossCycles('1001', 0);
+    expect(all.success, isFalse);
+  });
+
+  test(
+    'cycle sync stores the user-info snapshot (ERP /cycles/:id/sync)',
+    () async {
+      final id = await linkedCycle();
+      final cycles = CycleService(db, () => fake);
+      final r = await cycles.syncCycle(id, userInfoSpreadsheetId: 'ui');
+      expect(r.success, isTrue, reason: r.message);
+      expect(
+        r.message,
+        'تمت مزامنة جداول الدورة ومعلومات المستخدمين من Google',
+      );
+      final cycle = await db.getCycle(id);
+      expect(cycle!.managementRows.length, mgmt.length);
+
+      final local = await db.insertCycle(
+        name: 'ملفات',
+        managementRows: mgmt,
+        agentRows: agent,
+      );
+      final unlinked = await cycles.syncCycle(local);
+      expect(unlinked.success, isFalse);
+      expect(unlinked.message, contains('غير مرتبطة بجداول Google'));
+    },
+  );
+
+  test('background sync marks coloured rows as manually audited', () async {
+    final id = await linkedCycle();
+    fake.colors['cyc|${fake.ids['cyc']!['الإدارة']}'] = {2: '#facc15'};
+    fake.colors['cyc|${fake.ids['cyc']!['الوكيل']}'] = {
+      2: '#8b5cf6',
+      3: '#8b5cf6',
+    };
+    final worker = CycleSyncWorker(db, () => fake);
+    expect(await worker.runOnce(), 0, reason: 'off by default, like ERP');
+    await db.setValue(CycleSyncWorker.enabledKey, '1');
+    expect(await worker.runOnce(), 1);
+    final cache = await db.getCycleCache(id);
+    expect(cache!.auditedMgmtIds, {'1002'});
+    expect(cache.auditedAgentIds, {'1002'});
+    expect(cache.staleAfter!.isAfter(DateTime.now()), isTrue);
+    expect(await worker.runOnce(), 0, reason: 'cache still fresh');
+
+    final s = await search.searchUser(id, '1002', 0);
+    expect(s.hits.single.auditStatus, 'مدقق');
+    expect(s.hits.single.auditSource, 'مدقق يدوي');
+    final other = await search.searchUser(id, '1001', 0);
+    expect(other.hits.single.auditStatus, 'غير مدقق');
   });
 }

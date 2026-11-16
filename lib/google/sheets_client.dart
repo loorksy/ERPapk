@@ -74,6 +74,22 @@ abstract class SheetsApi {
     List<Map<String, dynamic>> requests,
   );
   Future<String> createSpreadsheet(String title, List<String> sheetTitles);
+
+  /// Background colour of each cell in [column] for rows 1..[rowCount]
+  /// (index 0 = row 1); null where Google reports no colour.
+  Future<List<Map<String, dynamic>?>> columnBackgrounds(
+    String spreadsheetId,
+    String sheetTitle,
+    String column,
+    int rowCount,
+  );
+}
+
+/// A background that is not plain white (ERP colours audited rows).
+bool isColoredBackground(Map<String, dynamic>? c) {
+  if (c == null) return false;
+  double v(String k) => (c[k] as num?)?.toDouble() ?? 0;
+  return !(v('red') >= 0.999 && v('green') >= 0.999 && v('blue') >= 0.999);
 }
 
 /// REST implementation over the phone's Google access token.
@@ -276,6 +292,41 @@ class GoogleSheetsApi implements SheetsApi {
       for (final r in (json['replies'] as List? ?? const []))
         Map<String, dynamic>.from(r as Map),
     ];
+  }
+
+  @override
+  Future<List<Map<String, dynamic>?>> columnBackgrounds(
+    String spreadsheetId,
+    String sheetTitle,
+    String column,
+    int rowCount,
+  ) async {
+    if (rowCount <= 0) return const [];
+    final range =
+        "'${escapeSheetTitleForRange(sheetTitle)}'!${column}1:$column$rowCount";
+    final json = await _send(
+      'GET',
+      _sheets('/${Uri.encodeComponent(spreadsheetId)}', {
+        'ranges': range,
+        'fields':
+            'sheets(data(startRow,rowData(values(effectiveFormat(backgroundColor)))))',
+      }),
+    );
+    final out = List<Map<String, dynamic>?>.filled(rowCount, null);
+    for (final sheet in (json['sheets'] as List? ?? const [])) {
+      for (final block in ((sheet as Map)['data'] as List? ?? const [])) {
+        final start = ((block as Map)['startRow'] as num?)?.toInt() ?? 0;
+        final rows = block['rowData'] as List? ?? const [];
+        for (var i = 0; i < rows.length && start + i < rowCount; i++) {
+          final values = (rows[i] as Map)['values'] as List?;
+          if (values == null || values.isEmpty) continue;
+          final fmt = (values.first as Map)['effectiveFormat'] as Map?;
+          final bg = fmt?['backgroundColor'];
+          if (bg is Map) out[start + i] = Map<String, dynamic>.from(bg);
+        }
+      }
+    }
+    return out;
   }
 
   @override

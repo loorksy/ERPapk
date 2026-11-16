@@ -57,20 +57,19 @@ class SearchService {
   final AppDatabase db;
   final SheetsApi Function() sheetsProvider;
 
-  Future<({Rows mgmt, Rows agent, CycleCache? cache})> _data(
+  /// Like ERP, the search reads only the cycle cache (`payroll_cycle_cache`),
+  /// filled by the bulk audit and by the background cycle sync.
+  Future<({Rows mgmt, Rows agent, CycleCache? cache})?> _data(
     Cycle cycle,
   ) async {
     final cache = await db.getCycleCache(cycle.id);
-    if (cache != null) {
-      return (mgmt: cache.managementData, agent: cache.agentData, cache: cache);
-    }
-    return (mgmt: cycle.managementRows, agent: cycle.agentRows, cache: null);
+    if (cache == null) return null;
+    return (mgmt: cache.managementData, agent: cache.agentData, cache: cache);
   }
 
-  static Rows _dataRows(Rows rows, int col) =>
-      rows.isNotEmpty && isHeaderRowCycle(rows[0], col)
-          ? rows.sublist(1)
-          : rows;
+  /// ERP always treats the first row as the header (`slice(1)`).
+  static Rows _dataRows(Rows rows) =>
+      rows.length > 1 ? rows.sublist(1) : const <List<String>>[];
 
   Future<CycleSearchHit?> _searchInCycle(
     Cycle cycle,
@@ -78,6 +77,7 @@ class SearchService {
     double discountRate,
   ) async {
     final data = await _data(cycle);
+    if (data == null) return null;
     final cols = await db.getCycleColumns(cycle.id);
     final mgmtColIdx = columnLetterToIndex(cols.mgmtUserIdCol) ?? 0;
     final agentUserColIdx = columnLetterToIndex(cols.agentUserIdCol) ?? 0;
@@ -87,7 +87,7 @@ class SearchService {
     final agentSalaryCells = <String?>[];
     String? name;
     String? canonicalId;
-    for (final row in _dataRows(data.mgmt, mgmtColIdx)) {
+    for (final row in _dataRows(data.mgmt)) {
       final id = normalizeUserId(cellAt(row, mgmtColIdx));
       if (id.isNotEmpty && id == queryId) {
         inMgmt = true;
@@ -96,7 +96,7 @@ class SearchService {
         if (name == null && n != null && n.isNotEmpty) name = n;
       }
     }
-    for (final row in _dataRows(data.agent, agentUserColIdx)) {
+    for (final row in _dataRows(data.agent)) {
       final id = normalizeUserId(cellAt(row, agentUserColIdx));
       if (id.isNotEmpty && id == queryId) {
         inAgent = true;
@@ -153,9 +153,9 @@ class SearchService {
     }
     final cycle = await db.getCycle(cycleId);
     if (cycle == null) return const SearchOutcome.fail('الدورة غير موجودة');
-    if (cycle.managementRows.isEmpty && cycle.agentRows.isEmpty) {
+    if (await db.getCycleCache(cycle.id) == null) {
       return const SearchOutcome.fail(
-        'لم يتم مزامنة الدورة بعد. حمّل الدورة من قسم تدقيق الرواتب.',
+        'لم يتم مزامنة الدورة بعد. انتظر المزامنة الخلفية أو نفّذ التدقيق من قسم الرواتب.',
       );
     }
     final hit = await _searchInCycle(cycle, queryId, discountRate);
@@ -263,17 +263,20 @@ class SearchService {
       return const IndividualAuditResult(false, 'الدورة غير موجودة');
     }
     final data = await _data(cycle);
+    if (data == null) {
+      return const IndividualAuditResult(
+        false,
+        'لم يتم مزامنة هذه الدورة بعد. انتظر المزامنة الخلفية أو نفّذ مزامنة من قسم Sheet.',
+      );
+    }
     final cols = await db.getCycleColumns(cycleId);
     final mgmtIdx = columnLetterToIndex(cols.mgmtUserIdCol) ?? 0;
     final agentIdx = columnLetterToIndex(cols.agentUserIdCol) ?? 0;
     final agentSalaryIdx = columnLetterToIndex(cols.agentSalaryCol) ?? 3;
 
-    final mgmtHeader =
-        data.mgmt.isNotEmpty && isHeaderRowCycle(data.mgmt[0], mgmtIdx) ? 1 : 0;
-    final agentHeader =
-        data.agent.isNotEmpty && isHeaderRowCycle(data.agent[0], agentIdx)
-            ? 1
-            : 0;
+    // ERP skips the first row of both sheets (`slice(1)`).
+    const mgmtHeader = 1;
+    const agentHeader = 1;
     List<String>? mgmtRow;
     final mgmtRowIndices = <int>[];
     for (var i = mgmtHeader; i < data.mgmt.length; i++) {
@@ -469,7 +472,10 @@ class SearchService {
       () => sheets.valuesGet(spreadsheetId, range),
     );
     final existingIds = <String>{};
-    for (var idx = 1; idx < existingRows.length; idx++) {
+    // Bug fix: ERP skipped row 1 even in target sheets the bulk audit wrote
+    // without a header, so that first user could be copied twice.
+    for (var idx = 0; idx < existingRows.length; idx++) {
+      if (idx == 0 && isHeaderRowGeneric(existingRows[0], mgmtIdx)) continue;
       final id = normalizeUserId(cellAt(existingRows[idx], mgmtIdx));
       if (id.isNotEmpty) existingIds.add(id);
     }

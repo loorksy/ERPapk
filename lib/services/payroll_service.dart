@@ -255,7 +255,7 @@ class PayrollService {
         cycle.userInfoHash == userInfoHash &&
         !req.forceReaudit) {
       return PayrollResult.fail(
-        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة، أو اختر «إجبار إعادة التدقيق».',
+        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة.',
         code: 'USER_INFO_UNCHANGED',
         url: spreadsheetUrl,
       );
@@ -553,7 +553,7 @@ class PayrollService {
         cycle.userInfoHash == userInfoHash &&
         !req.forceReaudit) {
       return PayrollResult.fail(
-        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الملف ثم أعد المحاولة، أو اختر «إجبار إعادة التدقيق».',
+        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الملف ثم أعد المحاولة.',
         code: 'USER_INFO_UNCHANGED',
       );
     }

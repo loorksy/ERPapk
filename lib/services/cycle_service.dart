@@ -126,7 +126,24 @@ class CycleService {
   Future<void> deleteCycle(int id) => db.deleteCycle(id);
 
   /// ERP `POST /cycles/:id/sync` (management + agent snapshots).
-  Future<SyncOutcome> syncCycle(int id) async {
+  Future<SyncOutcome> syncCycle(
+    int id, {
+    String? userInfoSpreadsheetId,
+    String? userInfoSheetName,
+  }) async {
+    try {
+      return await _syncCycle(id, userInfoSpreadsheetId, userInfoSheetName);
+    } catch (e) {
+      final m = e.toString();
+      return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الدورة من Google' : m);
+    }
+  }
+
+  Future<SyncOutcome> _syncCycle(
+    int id,
+    String? userInfoSpreadsheetId,
+    String? userInfoSheetName,
+  ) async {
     final cycle = await db.getCycle(id);
     if (cycle == null) return const SyncOutcome(false, 'الدورة غير موجودة');
     final mgmtSsId = cycle.managementSpreadsheetId;
@@ -134,7 +151,7 @@ class CycleService {
     if (mgmtSsId == null || agentSsId == null) {
       return const SyncOutcome(
         false,
-        'هذه الدورة غير مرتبطة بجداول Google. أنشئ دورة جديدة من قسم Sheet باستخدام «Google Sheets» ثم احفظها لتفعيل المزامنة.',
+        'هذه الدورة غير مرتبطة بجداول Google. أنشئ دورة جديدة من قسم Sheet باستخدام «استيراد من Google» ثم احفظها لتفعيل المزامنة.',
       );
     }
     final sheets = sheetsProvider();
@@ -149,12 +166,41 @@ class CycleService {
       cycle.agentSheetName,
       mgmtSsId == agentSsId ? mgmt.sheetTitleUsed : null,
     );
-    await db.updateCycle(id, {
-      'management_data': mgmt.values,
-      'agent_data': agent.values,
-      'management_sheet_name': mgmt.sheetTitleUsed ?? cycle.managementSheetName,
-      'agent_sheet_name': agent.sheetTitleUsed ?? cycle.agentSheetName,
-    });
+
+    var userInfoSynced = false;
+    var userInfoRowsCount = 0;
+    String? userInfoSheetUsed;
+    final uiSs = userInfoSpreadsheetId?.trim() ?? '';
+    if (uiSs.isNotEmpty) {
+      final pref = userInfoSheetName?.trim() ?? '';
+      final ui = await fetchSheetWithFallback(
+        sheets,
+        uiSs,
+        pref.isEmpty ? null : pref,
+      );
+      userInfoRowsCount = ui.values.length;
+      userInfoSheetUsed = ui.sheetTitleUsed ?? (pref.isEmpty ? null : pref);
+      await db.updateCycle(id, {
+        'management_data': mgmt.values,
+        'agent_data': agent.values,
+        'management_sheet_name':
+            mgmt.sheetTitleUsed ?? cycle.managementSheetName,
+        'agent_sheet_name': agent.sheetTitleUsed ?? cycle.agentSheetName,
+        'user_info_data': ui.values,
+        'user_info_spreadsheet_id': uiSs,
+        'user_info_sheet_name': userInfoSheetUsed,
+      });
+      userInfoSynced = true;
+    } else {
+      await db.updateCycle(id, {
+        'management_data': mgmt.values,
+        'agent_data': agent.values,
+        'management_sheet_name':
+            mgmt.sheetTitleUsed ?? cycle.managementSheetName,
+        'agent_sheet_name': agent.sheetTitleUsed ?? cycle.agentSheetName,
+      });
+    }
+
     var detail = 'الإدارة: ${mgmt.values.length} صف';
     if (mgmt.sheetTitleUsed != null) {
       detail += ' (ورقة "${mgmt.sheetTitleUsed}")';
@@ -163,7 +209,17 @@ class CycleService {
     if (agent.sheetTitleUsed != null) {
       detail += ' (ورقة "${agent.sheetTitleUsed}")';
     }
-    return SyncOutcome(true, 'تمت مزامنة جداول الدورة من Google', detail);
+    if (userInfoSynced) {
+      detail += '، معلومات المستخدمين: $userInfoRowsCount صف';
+      if (userInfoSheetUsed != null) detail += ' (ورقة "$userInfoSheetUsed")';
+    }
+    return SyncOutcome(
+      true,
+      userInfoSynced
+          ? 'تمت مزامنة جداول الدورة ومعلومات المستخدمين من Google'
+          : 'تمت مزامنة جداول الدورة من Google',
+      detail,
+    );
   }
 
   /// ERP `GET /spreadsheet-columns`: header row of a Google sheet.

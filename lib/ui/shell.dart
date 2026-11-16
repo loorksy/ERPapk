@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
+import '../app_services.dart';
 import 'erp_theme.dart';
 import 'payroll_page.dart';
 import 'search_page.dart';
@@ -25,8 +26,33 @@ class _NavItem {
   final String title;
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int _index = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => AppScope.read(context).resumeBackgroundSync(),
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final services = AppScope.read(context);
+    if (state == AppLifecycleState.resumed) {
+      services.resumeBackgroundSync();
+    } else if (state == AppLifecycleState.paused) {
+      services.syncWorker.stop();
+    }
+  }
 
   static const _items = [
     _NavItem(FontAwesomeIcons.fileExcel, 'Sheet', 'Sheet'),

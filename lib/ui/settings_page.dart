@@ -17,6 +17,34 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
+  bool? _syncEnabled;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final enabled = await AppScope.read(context).syncWorker.isEnabled();
+      if (mounted) setState(() => _syncEnabled = enabled);
+    });
+  }
+
+  /// ERP `POST /sheets/toggle-sync`.
+  Future<void> _toggleSync(bool _) async {
+    final services = AppScope.read(context);
+    if (!services.auth.isConnected) {
+      showToast(context, 'يرجى إعداد Google Sheets أولاً', ToastType.error);
+      return;
+    }
+    final next = !(_syncEnabled ?? false);
+    await services.syncWorker.setEnabled(next);
+    if (!mounted) return;
+    setState(() => _syncEnabled = next);
+    showToast(
+      context,
+      next ? 'تم تفعيل المزامنة' : 'تم إيقاف المزامنة',
+      ToastType.success,
+    );
+  }
 
   Future<void> _connect() async {
     setState(() => _busy = true);
@@ -148,6 +176,43 @@ class _SettingsPageState extends State<SettingsPage> {
                           loadingLabel: 'جاري الربط...',
                           onPressed: _connect,
                         ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Divider(height: 1, color: Tw.slate100),
+                    ),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'المزامنة التلقائية للدورات',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: Tw.slate800,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'كما في النظام: كل دقيقتين تُحدَّث لقطات الدورات المرتبطة بـ Google وحالة التدقيق اليدوي (الصفوف الملوّنة) للبحث، أثناء فتح التطبيق.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Tw.slate500,
+                                  height: 1.6,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Switch(
+                          value: _syncEnabled ?? false,
+                          activeTrackColor: Tw.indigo600,
+                          onChanged: _syncEnabled == null ? null : _toggleSync,
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),

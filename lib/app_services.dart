@@ -7,6 +7,7 @@ import 'data/app_database.dart';
 import 'google/google_auth.dart';
 import 'google/sheets_client.dart';
 import 'services/cycle_service.dart';
+import 'services/cycle_sync_worker.dart';
 import 'services/payroll_service.dart';
 import 'services/search_service.dart';
 
@@ -17,6 +18,7 @@ class AppServices extends ChangeNotifier {
     cycles = CycleService(db, () => sheets);
     payroll = PayrollService(db, () => sheets);
     search = SearchService(db, () => sheets);
+    syncWorker = CycleSyncWorker(db, () => sheets);
     auth.changes.listen((_) => notifyListeners());
   }
 
@@ -35,6 +37,16 @@ class AppServices extends ChangeNotifier {
   late final CycleService cycles;
   late final PayrollService payroll;
   late final SearchService search;
+  late final CycleSyncWorker syncWorker;
+
+  /// ERP starts the cycle sync worker with the server; the app runs it
+  /// while it is open (see AppShell) when enabled in Settings.
+  Future<void> resumeBackgroundSync() async {
+    if (await syncWorker.isEnabled()) {
+      syncWorker.start();
+      await syncWorker.runOnce();
+    }
+  }
 
   int _cyclesRevision = 0;
   int get cyclesRevision => _cyclesRevision;

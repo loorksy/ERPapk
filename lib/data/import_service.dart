@@ -98,6 +98,10 @@ class ImportService {
   static ImportedWorkbook readXlsx(Uint8List bytes) =>
       ImportedWorkbook._(Excel.decodeBytes(bytes));
 
+  /// Decodes [bytes] with a named encoding (see [decodeCsv]).
+  static String decodeText(Uint8List bytes, String encoding) =>
+      _decodeText(bytes, encoding);
+
   static String _decodeText(Uint8List bytes, String? encoding) {
     var offset = 0;
     String? bom;
