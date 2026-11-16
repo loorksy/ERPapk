@@ -89,15 +89,26 @@ class _PayrollPageState extends State<PayrollPage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final services = AppScope.of(context);
+    final connected = services.auth.isConnected;
     if (!_ready) {
       _ready = true;
       _revision = services.cyclesRevision;
+      _connected = connected;
       _init();
-    } else if (services.cyclesRevision != _revision) {
+      return;
+    }
+    if (services.cyclesRevision != _revision) {
       _revision = services.cyclesRevision;
       _reloadCycles();
     }
+    if (connected != _connected) {
+      // Google was connected or disconnected from Settings.
+      _connected = connected;
+      if (_optionsVisible) _loadSpreadsheetsList();
+    }
   }
+
+  bool _connected = false;
 
   @override
   void dispose() {
