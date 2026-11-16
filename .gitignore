@@ -11,4 +11,5 @@ android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 *.keystore
 *.p12
 *.apk
+!releases/*.apk
 *.aab

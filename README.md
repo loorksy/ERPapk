@@ -53,6 +53,10 @@
 
 **إضافات لا تغيّر منطق ERP:** التدقيق من ملف على الهاتف بدون Google مع تصدير Excel، خيار «لصق رابط جدول Google»، وحصر التلوين في عدد أعمدة الورقة الفعلي بدل 200 حتى لا يرفض Google النطاق.
 
+## التنزيل
+
+آخر نسخة موقّعة: [`releases/lork-audit-2.1.0.apk`](releases/lork-audit-2.1.0.apk) — الإصدار 2.1.0 (versionCode 4)، SHA-256 `1b4ce5bd5b4e007305e10aa766d21836b76429262f9744f66f183fa875f6d2ae`. تُثبَّت كتحديث فوق أي نسخة سابقة من التطبيق.
+
 ## البناء
 
 - **GitHub Actions:** `.github/workflows/build-apk.yml` يبني APK Release موقّعًا عند الدفع إلى `main` أو `ccr-*` أو يدويًا، ويرفعه باسم `lork-audit-apk` في صفحة التشغيل.
