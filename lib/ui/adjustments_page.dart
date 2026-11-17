@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
@@ -46,6 +47,8 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   AuditJob? _job;
   Timer? _poll;
   AdjustOutcome? _last;
+  int? _lastJobId;
+  String _lastSsId = '';
 
   /// ERP offers columns A–Z.
   static final _letters = [for (var i = 0; i < 26; i++) columnIndexToLetter(i)];
@@ -238,7 +241,13 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     final json = await _s.db.getAuditJobResult(job.id);
     if (!mounted) return;
     final out = json == null ? null : AdjustOutcome.fromJson(json);
-    setState(() => _last = out != null && out.success ? out : _last);
+    if (out != null && out.success) {
+      setState(() {
+        _last = out;
+        _lastJobId = job.id;
+        _lastSsId = (job.request['spreadsheetId'] ?? '').toString();
+      });
+    }
     if (job.seen) return;
     await _s.db.updateAuditJob(job.id, {'seen': 1});
     if (!mounted) return;
@@ -257,7 +266,14 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     builder:
         (_) => Directionality(
           textDirection: TextDirection.rtl,
-          child: _ResultsDialog(out),
+          child: _ResultsDialog(
+            out,
+            jobId: _lastJobId,
+            spreadsheetId: _lastSsId,
+            onChanged: (o) {
+              if (mounted) setState(() => _last = o);
+            },
+          ),
         ),
   );
 
@@ -486,10 +502,72 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   }
 }
 
-/// ERP «نتائج المعالجة»: totals, debtors, the table and «نسخ».
-class _ResultsDialog extends StatelessWidget {
-  const _ResultsDialog(this.out);
+/// ERP «نتائج المعالجة»: totals, debtors, the table and «نسخ»; plus the
+/// owner's «دفع إلى الشيت».
+class _ResultsDialog extends StatefulWidget {
+  const _ResultsDialog(
+    this.out, {
+    required this.jobId,
+    required this.spreadsheetId,
+    required this.onChanged,
+  });
   final AdjustOutcome out;
+  final int? jobId;
+  final String spreadsheetId;
+  final ValueChanged<AdjustOutcome> onChanged;
+
+  @override
+  State<_ResultsDialog> createState() => _ResultsDialogState();
+}
+
+class _ResultsDialogState extends State<_ResultsDialog> {
+  late AdjustOutcome out = widget.out;
+  bool _pushing = false;
+
+  /// Owner's request: the pasted lines, the results, the totals and the
+  /// settled users in a new sheet «إضافات وخصومات» of the same spreadsheet.
+  Future<void> _push() async {
+    final services = AppScope.read(context);
+    final jobId = widget.jobId;
+    if (jobId == null || widget.spreadsheetId.isEmpty) return;
+    setState(() => _pushing = true);
+    try {
+      final done = await services.adjustments.pushResults(
+        widget.spreadsheetId,
+        out,
+        (o) => services.db.updateAuditJob(jobId, {
+          'result_json': jsonEncode(o.toJson()),
+        }),
+      );
+      if (!mounted) return;
+      setState(() => out = done);
+      widget.onChanged(done);
+      showToast(
+        context,
+        'تمت الكتابة في ورقة «${done.pushedSheet}»',
+        ToastType.success,
+      );
+    } catch (e) {
+      if (mounted) {
+        showToast(
+          context,
+          'تعذّر الدفع إلى الشيت: $e — أعد المحاولة (لن تُنشأ ورقة ثانية).',
+          ToastType.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _pushing = false);
+    }
+  }
+
+  void _open() {
+    final base = out.spreadsheetUrl;
+    if (base == null) return;
+    launchUrl(
+      Uri.parse('$base#gid=${out.pushedSheetId ?? 0}'),
+      mode: LaunchMode.externalApplication,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -631,6 +709,26 @@ class _ResultsDialog extends StatelessWidget {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  out.pushed
+                      ? ErpButton(
+                        label: 'فتح ورقة «${out.pushedSheet}»',
+                        icon: FontAwesomeIcons.arrowUpRightFromSquare,
+                        kind: ErpButtonKind.outline,
+                        height: 38,
+                        fontSize: 12.5,
+                        onPressed: _open,
+                      )
+                      : ErpButton(
+                        label: 'دفع إلى الشيت (ورقة «إضافات وخصومات»)',
+                        icon: FontAwesomeIcons.fileExport,
+                        kind: ErpButtonKind.indigoSoft,
+                        height: 38,
+                        fontSize: 12.5,
+                        loading: _pushing,
+                        loadingLabel: 'جاري الكتابة في الشيت…',
+                        onPressed: widget.jobId == null ? null : _push,
+                      ),
                   if (s.debtUsers.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Container(

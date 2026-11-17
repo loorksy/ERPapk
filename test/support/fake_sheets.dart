@@ -170,7 +170,9 @@ class FakeSheets implements SheetsApi {
             'properties': {'sheetId': ids[id]![t], 'title': t},
           },
         });
-      } else if (r['repeatCell'] != null) {
+      } else if (r['repeatCell'] != null &&
+          r['repeatCell']['cell']['userEnteredFormat']['backgroundColor'] !=
+              null) {
         final range = r['repeatCell']['range'];
         final c =
             r['repeatCell']['cell']['userEnteredFormat']['backgroundColor']

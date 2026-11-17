@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -124,6 +125,69 @@ void main() {
     expect(text.split('\n')[1], '1003\tباقي عليه\t\$20,5');
     expect(text, contains('مجموع المتبقي (لنا عليهم)\t\t\$20,5'));
     expect(text, contains('مجموع تم خصم\t\t\$40'));
+  });
+
+  test('results sheet: pasted lines, aligned results, totals, settlements', () {
+    const bulk =
+        '1002\tخصم\t20\n\n1001\tخصم\t50\n9999\tخصم\t5\n1001\tاضافة\t30\n\n';
+    final c = AdjustmentsService.computeBulk(bulk, sheet);
+    final out = AdjustOutcome(
+      success: true,
+      message: '',
+      results: c.results,
+      summary: AdjustmentsService.summarize(c.results),
+      lines: AdjustmentsService.sheetLines(bulk, c),
+      settlements: c.settlements,
+    );
+    final layout = AdjustmentsService.sheetLayout(out);
+    final rows = layout.rows;
+    expect(rows[0], [
+      'رقم المستخدم',
+      'النوع',
+      'المبلغ',
+      '',
+      'رقم المستخدم',
+      'الحالة',
+      'المبلغ',
+    ]);
+    // One row per pasted line (trailing blank lines dropped), result beside it.
+    expect(rows[1], [
+      '1002',
+      'خصم',
+      '20',
+      '',
+      '1002',
+      'تم الخصم بالكامل',
+      '\$20',
+    ]);
+    expect(rows[2], ['', '', '', '', '', '', '']);
+    expect(rows[3], [
+      '1001',
+      'خصم',
+      '50',
+      '',
+      '1001',
+      'باقي عليه (تسوية)',
+      '\$10',
+    ]);
+    expect(rows[4], ['9999', 'خصم', '5', '', '9999', 'غير موجود', '\$5']);
+    expect(rows[5], [
+      '1001',
+      'اضافة',
+      '30',
+      '',
+      '1001',
+      'ضمن التسوية (الصف 4)',
+      '',
+    ]);
+    expect(rows[6], isEmpty);
+    expect(rows[7], ['', '', '', '', 'مجموع المتبقي (لنا عليهم)', '', '\$10']);
+    expect(rows[8], ['', '', '', '', 'مجموع تم خصم', '', '\$30']);
+    expect(rows[9], ['', '', '', '', 'مجموع غير موجود', '', '\$5']);
+    // Five empty rows, then the settled users.
+    expect(layout.settleHeader, 16);
+    expect(rows[15], ['رقم المستخدم', 'الإضافة', 'الخصم', 'الصافي']);
+    expect(rows[16], ['1001', 30.0, 50.0, -20.0]);
   });
 
   test(
@@ -286,6 +350,62 @@ void main() {
       expect(job.error, contains('الصف 3'));
       expect(fake.books['ui']!['Data']![2][11], '500');
     });
+
+    test(
+      'pushes the results to a new sheet, once, even after a drop',
+      () async {
+        final job = await run('1001\tخصم\t50\n1001\tاضافة\t30\n1004\tاضافة\t5');
+        final service = AdjustmentsService(db, () => fake);
+        var out = AdjustOutcome.fromJson((await db.getAuditJobResult(job.id))!);
+        expect(out.lines.length, 3);
+        Future<void> save(AdjustOutcome o) =>
+            db.updateAuditJob(job.id, {'result_json': jsonEncode(o.toJson())});
+        var down = true;
+        fake.failWhen = (op, payload) {
+          if (down && op == 'valuesUpdate' && '$payload'.contains('إضافات')) {
+            down = false;
+            return true;
+          }
+          return false;
+        };
+        Object? error;
+        try {
+          await service.pushResults('ui', out, save);
+        } catch (e) {
+          error = e;
+        }
+        expect(error, isNotNull);
+        // The sheet exists and is remembered; the retry writes into it.
+        out = AdjustOutcome.fromJson((await db.getAuditJobResult(job.id))!);
+        expect(out.pushedSheet, 'إضافات وخصومات');
+        expect(out.pushed, isFalse);
+        out = await service.pushResults('ui', out, save);
+        expect(out.pushed, isTrue);
+        expect(
+          fake.books['ui']!.keys.where((k) => k.startsWith('إضافات')).toList(),
+          ['إضافات وخصومات'],
+        );
+        final written = fake.books['ui']!['إضافات وخصومات']!;
+        expect(written[1].sublist(4), ['1001', 'باقي عليه (تسوية)', '\$10']);
+        expect(written[2].sublist(4, 6), ['1001', 'ضمن التسوية (الصف 2)']);
+        expect(
+          written.any(
+            (r) => r.length > 3 && r[0] == 'رقم المستخدم' && r[3] == 'الصافي',
+          ),
+          isTrue,
+        );
+        expect(fake.log.any((l) => l.contains('updateBorders')), isTrue);
+
+        // Another processing goes to a second sheet, not over the first.
+        final next = await run('1002\tاضافة\t1');
+        final out2 = await service.pushResults(
+          'ui',
+          AdjustOutcome.fromJson((await db.getAuditJobResult(next.id))!),
+          (_) async {},
+        );
+        expect(out2.pushedSheet, 'إضافات وخصومات 2');
+      },
+    );
 
     test('adjustments do not wait for or block cycle audits', () async {
       final job = await run('1001\tاضافة\t1');

@@ -107,8 +107,35 @@ class AdjustmentsService {
         results: computed.results,
         summary: summarize(computed.results),
         spreadsheetUrl: meta.url,
+        lines: sheetLines(req.bulkData, computed),
+        settlements: computed.settlements,
       ),
     );
+  }
+
+  /// The pasted lines as ERP splits them, each with its result; trailing
+  /// blank lines are dropped.
+  static List<AdjustSheetLine> sheetLines(String bulkData, BulkComputation c) {
+    final all = bulkData.split('\n');
+    var last = all.length - 1;
+    while (last >= 0 && all[last].trim().isEmpty) {
+      last--;
+    }
+    return [
+      for (var n = 0; n <= last; n++)
+        AdjustSheetLine(
+          _cellsOf(all[n]),
+          c.lineResult[n] ?? -1,
+          c.mergedInto[n] ?? -1,
+        ),
+    ];
+  }
+
+  static List<String> _cellsOf(String line) {
+    if (line.trim().isEmpty) return const [];
+    var parts = line.split('\t');
+    if (parts.length < 2) parts = line.trim().split(RegExp(r'\s{2,}|\s+'));
+    return [for (final p in parts.take(3)) p.trim()];
   }
 
   /// Runs step [index]; repeating a step writes the same cells again.
@@ -336,7 +363,9 @@ class AdjustmentsService {
   /// id, type, amount; «خصم كامل» needs no amount.
   static List<AdjustLine> parseLines(String bulkData) {
     final out = <AdjustLine>[];
-    for (final line in bulkData.split('\n')) {
+    final all = bulkData.split('\n');
+    for (var n = 0; n < all.length; n++) {
+      final line = all[n];
       if (line.trim().isEmpty) continue;
       var parts = line.split('\t');
       if (parts.length < 2) parts = line.trim().split(RegExp(r'\s{2,}|\s+'));
@@ -355,7 +384,7 @@ class AdjustmentsService {
         }
       }
       if (!full && parts.length < 3) continue;
-      out.add(AdjustLine(userId, type, amountRaw, full, amountNum));
+      out.add(AdjustLine(userId, type, amountRaw, full, amountNum, n));
     }
     return out;
   }
@@ -391,6 +420,7 @@ class AdjustmentsService {
     final lines = parseLines(bulkData);
     final ops = <_Op>[];
     final settled = <int, _Op>{};
+    final mergedInto = <int, int>{};
     final byRow = <int, List<AdjustLine>>{};
     for (final l in lines) {
       final r = rowOf(l.userId);
@@ -405,7 +435,11 @@ class AdjustmentsService {
           mine.any((x) => x.isDeduction) &&
           mine.any((x) => !x.isDeduction);
       if (!l.full && mixed) {
-        if (settled.containsKey(r)) continue; // merged into the first line
+        if (settled.containsKey(r)) {
+          // Merged into the settlement on the user's first line.
+          mergedInto[l.lineNo] = settled[r]!.line.lineNo;
+          continue;
+        }
         var add = 0.0, ded = 0.0;
         for (final x in mine) {
           if (x.isDeduction) {
@@ -423,11 +457,24 @@ class AdjustmentsService {
     }
 
     final results = <AdjustResult>[];
+    final lineResult = <int, int>{};
+    final settlements = <AdjustSettlement>[];
     final salaryNow = <int, double>{};
     final finalCells = <int, AdjustWrite>{};
     for (final op in ops) {
       final l = op.line;
       final found = op.row;
+      lineResult[l.lineNo] = results.length;
+      if (op.isSettlement) {
+        settlements.add(
+          AdjustSettlement(
+            l.userId,
+            op.add!,
+            op.ded!,
+            round2(op.add! - op.ded!),
+          ),
+        );
+      }
       if (found == null) {
         final amt = l.full ? 0.0 : l.amountNum;
         results.add(
@@ -491,7 +538,13 @@ class AdjustmentsService {
       );
     }
     final writes = finalCells.values.toList()..sort((a, b) => a.row - b.row);
-    return BulkComputation(results, writes);
+    return BulkComputation(
+      results,
+      writes,
+      lineResult: lineResult,
+      mergedInto: mergedInto,
+      settlements: settlements,
+    );
   }
 
   /// ERP `summarizeResults`.
@@ -514,6 +567,179 @@ class AdjustmentsService {
     );
   }
 
+  // ======================================================================
+  // Results sheet (owner's request, 2026-11-17)
+  // ======================================================================
+
+  static const resultsSheetName = 'إضافات وخصومات';
+
+  /// The results laid out as the owner pastes them by hand: the pasted
+  /// lines in A–C, column D empty, each line's result in E–G (as «نسخ»
+  /// copies it), the totals under them, and the settled users in a table
+  /// further down.
+  static ResultsSheet sheetLayout(AdjustOutcome out) {
+    String m(double v) => money(v).replaceFirst('.', ',');
+    final rows = <List<Object?>>[
+      [
+        'رقم المستخدم',
+        'النوع',
+        'المبلغ',
+        '',
+        'رقم المستخدم',
+        'الحالة',
+        'المبلغ',
+      ],
+    ];
+    for (final l in out.lines) {
+      final a = [
+        for (var i = 0; i < 3; i++) i < l.cells.length ? l.cells[i] : '',
+      ];
+      var e = <Object?>['', '', ''];
+      if (l.result >= 0 && l.result < out.results.length) {
+        final r = out.results[l.result];
+        e = [r.id, r.displayStatus, m(r.amount)];
+      } else if (l.mergedInto >= 0) {
+        e = [
+          l.cells.isEmpty ? '' : l.cells.first,
+          'ضمن التسوية (الصف ${l.mergedInto + 2})',
+          '',
+        ];
+      }
+      rows.add([...a, '', ...e]);
+    }
+    final s = out.summary ?? summarize(out.results);
+    rows.add(const []);
+    rows.add(['', '', '', '', 'مجموع المتبقي (لنا عليهم)', '', m(s.totalDebt)]);
+    rows.add(['', '', '', '', 'مجموع تم خصم', '', m(s.totalDeducted)]);
+    rows.add(['', '', '', '', 'مجموع غير موجود', '', m(s.totalNotFound)]);
+    int? settleHeader;
+    if (out.settlements.isNotEmpty) {
+      for (var i = 0; i < 5; i++) {
+        rows.add(const []);
+      }
+      settleHeader = rows.length + 1;
+      rows.add(['رقم المستخدم', 'الإضافة', 'الخصم', 'الصافي']);
+      for (final x in out.settlements) {
+        rows.add([x.id, x.added, x.deducted, x.net]);
+      }
+    }
+    return ResultsSheet(rows, settleHeader, out.settlements.length);
+  }
+
+  /// Writes the results to a new sheet «إضافات وخصومات» of the same
+  /// spreadsheet ([resultsSheetName] 2, 3… if the name is taken). [save]
+  /// keeps the sheet name as soon as it exists, so a retry after a lost
+  /// connection writes into the same sheet instead of a second one.
+  Future<AdjustOutcome> pushResults(
+    String spreadsheetId,
+    AdjustOutcome out,
+    Future<void> Function(AdjustOutcome) save,
+  ) async {
+    final sheets = sheetsProvider();
+    final meta = await withSheetsRetry(
+      () => sheets.getSpreadsheet(spreadsheetId),
+    );
+    final layout = sheetLayout(out);
+    SheetProps? existing;
+    for (final sp in meta.sheets) {
+      if (out.pushedSheet != null && sp.title == out.pushedSheet) existing = sp;
+    }
+    String name;
+    int sheetId;
+    if (existing != null) {
+      name = existing.title;
+      sheetId = existing.sheetId;
+    } else {
+      final taken = {for (final sp in meta.sheets) sp.title.toLowerCase()};
+      name = resultsSheetName;
+      for (var k = 2; taken.contains(name.toLowerCase()); k++) {
+        name = '$resultsSheetName $k';
+      }
+      final replies = await withSheetsRetry(
+        () => sheets.batchUpdate(spreadsheetId, [
+          {
+            'addSheet': {
+              'properties': {
+                'title': name,
+                'gridProperties': {
+                  'rowCount':
+                      layout.rows.length + 20 > 1000
+                          ? layout.rows.length + 20
+                          : 1000,
+                  'columnCount': 26,
+                },
+              },
+            },
+          },
+        ]),
+      );
+      final props =
+          (replies.isEmpty ? null : replies.first['addSheet'])?['properties'];
+      sheetId = (props?['sheetId'] as num?)?.toInt() ?? 0;
+      out = out.withPush(name, sheetId, done: false);
+      await save(out);
+    }
+    final esc = escapeSheetTitleForRange(name);
+    const chunk = 5000;
+    for (var i = 0; i < layout.rows.length; i += chunk) {
+      final end =
+          i + chunk > layout.rows.length ? layout.rows.length : i + chunk;
+      await withSheetsRetry(
+        () => sheets.valuesUpdate(
+          spreadsheetId,
+          "'$esc'!A${i + 1}",
+          layout.rows.sublist(i, end),
+        ),
+      );
+    }
+    Map<String, dynamic> range(int r0, int r1, int c0, int c1) => {
+      'sheetId': sheetId,
+      'startRowIndex': r0,
+      'endRowIndex': r1,
+      'startColumnIndex': c0,
+      'endColumnIndex': c1,
+    };
+    Map<String, dynamic> bold(Map<String, dynamic> r) => {
+      'repeatCell': {
+        'range': r,
+        'cell': {
+          'userEnteredFormat': {
+            'textFormat': {'bold': true},
+          },
+        },
+        'fields': 'userEnteredFormat.textFormat.bold',
+      },
+    };
+    const line = {
+      'style': 'SOLID',
+      'width': 1,
+      'color': {'red': 0.6, 'green': 0.6, 'blue': 0.6},
+    };
+    final h = layout.settleHeader;
+    await withSheetsRetry(
+      () => sheets.batchUpdate(spreadsheetId, [
+        bold(range(0, 1, 0, 7)),
+        if (h != null) ...[
+          bold(range(h - 1, h, 0, 4)),
+          {
+            'updateBorders': {
+              'range': range(h - 1, h + layout.settleRows, 0, 4),
+              'top': line,
+              'bottom': line,
+              'left': line,
+              'right': line,
+              'innerHorizontal': line,
+              'innerVertical': line,
+            },
+          },
+        ],
+      ]),
+    );
+    out = out.withPush(name, sheetId, done: true);
+    await save(out);
+    return out;
+  }
+
   /// ERP `formatMoneyUI`.
   static String money(double v) => '\$${jsNumberToString(round2(v))}';
 
@@ -530,6 +756,15 @@ class AdjustmentsService {
     b.write('مجموع غير موجود\t\t${m(s.totalNotFound)}\n');
     return b.toString();
   }
+}
+
+class ResultsSheet {
+  const ResultsSheet(this.rows, this.settleHeader, this.settleRows);
+  final List<List<Object?>> rows;
+
+  /// 1-based row of the settlement table header, or null.
+  final int? settleHeader;
+  final int settleRows;
 }
 
 class AdjustmentConflict implements Exception {
@@ -583,8 +818,12 @@ class AdjustLine {
     this.type,
     this.amountRaw,
     this.full,
-    this.amountNum,
-  );
+    this.amountNum, [
+    this.lineNo = 0,
+  ]);
+
+  /// 0-based line in the pasted text.
+  final int lineNo;
   final String userId;
   final String type;
   final String amountRaw;
@@ -635,9 +874,69 @@ class AdjustWrite {
 }
 
 class BulkComputation {
-  const BulkComputation(this.results, this.writes);
+  const BulkComputation(
+    this.results,
+    this.writes, {
+    this.lineResult = const {},
+    this.mergedInto = const {},
+    this.settlements = const [],
+  });
   final List<AdjustResult> results;
   final List<AdjustWrite> writes;
+
+  /// Pasted line (0-based) → its entry in [results].
+  final Map<int, int> lineResult;
+
+  /// Pasted line merged into a settlement → the line that holds it.
+  final Map<int, int> mergedInto;
+
+  /// Users whose additions and deductions were netted (owner's change).
+  final List<AdjustSettlement> settlements;
+}
+
+/// One settled user: total additions, total deductions and the net.
+class AdjustSettlement {
+  const AdjustSettlement(this.id, this.added, this.deducted, this.net);
+  final String id;
+  final double added;
+  final double deducted;
+  final double net;
+
+  List<Object?> toJson() => [id, added, deducted, net];
+  static AdjustSettlement fromJson(Object? j) {
+    final l = j as List;
+    return AdjustSettlement(
+      l[0].toString(),
+      (l[1] as num).toDouble(),
+      (l[2] as num).toDouble(),
+      (l[3] as num).toDouble(),
+    );
+  }
+}
+
+/// One pasted line as the results sheet shows it: the original cells
+/// (A–C) and the line's result, if any.
+class AdjustSheetLine {
+  const AdjustSheetLine(this.cells, this.result, this.mergedInto);
+
+  /// The line split like ERP (Tab, else spaces), at most three cells.
+  final List<String> cells;
+
+  /// Index in the results, or -1 (blank or ignored line).
+  final int result;
+
+  /// For a line merged into a settlement: the line that holds it, else -1.
+  final int mergedInto;
+
+  List<Object?> toJson() => [cells, result, mergedInto];
+  static AdjustSheetLine fromJson(Object? j) {
+    final l = j as List;
+    return AdjustSheetLine(
+      [for (final c in (l[0] as List)) c.toString()],
+      (l[1] as num).toInt(),
+      (l[2] as num).toInt(),
+    );
+  }
 }
 
 /// One line of ERP's results table.
@@ -752,12 +1051,41 @@ class AdjustOutcome {
     this.results = const [],
     this.summary,
     this.spreadsheetUrl,
+    this.lines = const [],
+    this.settlements = const [],
+    this.pushedSheet,
+    this.pushedSheetId,
+    this.pushed = false,
   });
   final bool success;
   final String message;
   final List<AdjustResult> results;
   final AdjustSummary? summary;
   final String? spreadsheetUrl;
+
+  /// Every pasted line with its result, for the results sheet.
+  final List<AdjustSheetLine> lines;
+  final List<AdjustSettlement> settlements;
+
+  /// The «إضافات وخصومات» sheet created for these results, once
+  /// [pushed] is true everything is written in it.
+  final String? pushedSheet;
+  final int? pushedSheetId;
+  final bool pushed;
+
+  AdjustOutcome withPush(String sheet, int sheetId, {required bool done}) =>
+      AdjustOutcome(
+        success: success,
+        message: message,
+        results: results,
+        summary: summary,
+        spreadsheetUrl: spreadsheetUrl,
+        lines: lines,
+        settlements: settlements,
+        pushedSheet: sheet,
+        pushedSheetId: sheetId,
+        pushed: done,
+      );
 
   Map<String, Object?> toJson() => {
     'kind': 'adjustments',
@@ -766,6 +1094,11 @@ class AdjustOutcome {
     'results': [for (final r in results) r.toJson()],
     'summary': summary?.toJson(),
     'spreadsheetUrl': spreadsheetUrl,
+    'lines': [for (final l in lines) l.toJson()],
+    'settlements': [for (final x in settlements) x.toJson()],
+    'pushedSheet': pushedSheet,
+    'pushedSheetId': pushedSheetId,
+    'pushed': pushed,
   };
 
   static AdjustOutcome fromJson(Map<String, Object?> j) => AdjustOutcome(
@@ -782,6 +1115,17 @@ class AdjustOutcome {
             )
             : null,
     spreadsheetUrl: j['spreadsheetUrl'] as String?,
+    lines: [
+      for (final l in (j['lines'] as List? ?? const []))
+        AdjustSheetLine.fromJson(l),
+    ],
+    settlements: [
+      for (final x in (j['settlements'] as List? ?? const []))
+        AdjustSettlement.fromJson(x),
+    ],
+    pushedSheet: j['pushedSheet'] as String?,
+    pushedSheetId: (j['pushedSheetId'] as num?)?.toInt(),
+    pushed: j['pushed'] == true,
   );
 }
 
