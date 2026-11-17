@@ -1322,9 +1322,17 @@ class PayrollPageState extends State<PayrollPage> {
       msg = 'تمت مزامنة جداول الفترة من Google ثم $msg';
     }
     final when = _job?.updatedAt;
+    // The result shown is the one of the latest job, which may be one of
+    // the «غير مذكور» tools rather than the audit.
+    final kind =
+        r.localOnly || _job == null ? JobKind.audit : JobKind.of(_job!.request);
+    final what = kind == JobKind.audit ? 'التدقيق' : JobKind.title(kind);
+    final mgmtId =
+        (_cycle?.managementSpreadsheetId ?? '').isEmpty
+            ? null
+            : _cycle!.managementSpreadsheetId;
     final agent = hexColor(_agentColor);
     final mgmt = hexColor(_mgmtColor);
-    final cycle = _cycle;
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       decoration: panelDecoration(radius: Ds.radiusL),
@@ -1351,8 +1359,8 @@ class PayrollPageState extends State<PayrollPage> {
                 child: Text(
                   r.applied
                       ? (when == null || r.localOnly
-                          ? 'اكتمل التدقيق'
-                          : 'اكتمل التدقيق ${_when(when)}')
+                          ? 'اكتمل $what'
+                          : 'اكتمل $what ${_when(when)}')
                       : 'لم تُطبَّق النتائج',
                   style: TextStyle(fontSize: 14, color: Tw.ink2),
                 ),
@@ -1430,21 +1438,23 @@ class PayrollPageState extends State<PayrollPage> {
               alignment: WrapAlignment.spaceEvenly,
               spacing: 4,
               children: [
+                // One link per spreadsheet: the management table, and the
+                // spreadsheet of the result when it is another one.
                 if (!r.localOnly &&
-                    cycle?.managementSpreadsheetId != null &&
-                    cycle!.managementSpreadsheetId!.isNotEmpty)
+                    mgmtId != null &&
+                    !(r.spreadsheetUrl?.contains(mgmtId) ?? false))
                   _link(
                     Icons.open_in_new,
                     'جدول الإدارة',
                     () => _openUrl(
-                      'https://docs.google.com/spreadsheets/d/${cycle.managementSpreadsheetId}',
+                      'https://docs.google.com/spreadsheets/d/$mgmtId',
                     ),
                   ),
                 if (r.spreadsheetUrl != null)
                   _link(
                     Icons.open_in_new,
-                    r.summary == null
-                        ? 'فتح جدول الإدارة'
+                    mgmtId != null && r.spreadsheetUrl!.contains(mgmtId)
+                        ? 'جدول الإدارة'
                         : 'بيانات المستخدمين',
                     () => _openUrl(r.spreadsheetUrl!),
                   ),

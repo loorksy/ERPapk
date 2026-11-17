@@ -196,68 +196,71 @@ class TwPalette {
     scrim: Color(0x6b0e1612), // --scrim
   );
 
-  /// Dark, from the mockup's `:root[data-theme="dark"]`.
+  /// Dark (owner's feedback on 3.1.1, 2026-11-17): a neutral, high-contrast
+  /// dark like the dark themes of global apps instead of the mockup's
+  /// green-tinted blacks. Near-black background, clearly lighter cards,
+  /// near-white text, grey secondary text, one clean green accent.
   static const dark = TwPalette(
-    slate50: Color(0xff101613), // --paper
-    slate100: Color(0xff202a25), // --surface-2
-    slate200: Color(0xff28332e), // --rule
-    slate300: Color(0xff36433c),
-    slate400: Color(0xff6e7b74), // --hatch
-    slate500: Color(0xff7d8a83), // --ink-3
-    slate600: Color(0xffa3b0a9), // --ink-2
-    slate700: Color(0xffbfcac4),
-    slate800: Color(0xffd2dbd6),
-    slate900: Color(0xffe2e9e5), // --ink
-    indigo50: Color(0xff1c362d), // --accent-soft
-    indigo100: Color(0xff234437),
-    indigo200: Color(0xff2f5a49),
-    indigo500: Color(0xff6cc6a5),
-    indigo600: Color(0xff5dbe9b), // --accent
-    indigo700: Color(0xff86d4b8), // --accent-ink
-    indigo800: Color(0xff4faa89), // --accent-press
-    indigo900: Color(0xffc0eadb),
+    slate50: Color(0xff121212), // background
+    slate100: Color(0xff2a2a2a), // fields and chips inside cards
+    slate200: Color(0xff333333), // dividers
+    slate300: Color(0xff474747),
+    slate400: Color(0xff707070), // hatch
+    slate500: Color(0xff9a9a9a), // tertiary text
+    slate600: Color(0xffc2c2c2), // secondary text
+    slate700: Color(0xffd6d6d6),
+    slate800: Color(0xffe6e6e6),
+    slate900: Color(0xfff5f5f5), // text
+    indigo50: Color(0xff1d3a2e), // accent tonal background
+    indigo100: Color(0xff244637),
+    indigo200: Color(0xff2f5b47),
+    indigo500: Color(0xff5bcfa1),
+    indigo600: Color(0xff45c792), // accent
+    indigo700: Color(0xff7fe0b8), // accent text on tonal
+    indigo800: Color(0xff38ad7e), // pressed
+    indigo900: Color(0xffc4f1dd),
     violet500: Color(0xff8b5cf6),
-    emerald50: Color(0xff1c362d),
-    emerald200: Color(0xff2f5a49),
-    emerald500: Color(0xff6cc6a5),
-    emerald600: Color(0xff5dbe9b),
-    emerald700: Color(0xff86d4b8),
-    emerald800: Color(0xffa3e0ca),
+    emerald50: Color(0xff1d3a2e),
+    emerald200: Color(0xff2f5b47),
+    emerald500: Color(0xff5bcfa1),
+    emerald600: Color(0xff45c792),
+    emerald700: Color(0xff7fe0b8),
+    emerald800: Color(0xffa6ebcd),
     teal500: Color(0xff2dd4bf),
-    amber50: Color(0xff382d18), // --warn-soft
-    amber100: Color(0xff43361d),
-    amber200: Color(0xff5b4826),
-    amber500: Color(0xffd9a24a),
-    amber600: Color(0xffdfab57),
-    amber700: Color(0xffe5b465), // --warn
-    amber800: Color(0xffebc583),
-    amber900: Color(0xfff0d4a2),
-    amber950: Color(0xfff5e3c2),
+    amber50: Color(0xff3a2f18), // warn tonal background
+    amber100: Color(0xff45381c),
+    amber200: Color(0xff5c4a24),
+    amber500: Color(0xffe8b04e),
+    amber600: Color(0xffedba5f),
+    amber700: Color(0xfff4c76f), // warn
+    amber800: Color(0xfff7d390),
+    amber900: Color(0xfff9deab),
+    amber950: Color(0xfffcedcf),
     orange500: Color(0xfffb8a3c),
-    red50: Color(0xff3a211d), // --danger-soft
-    red100: Color(0xff472822),
-    red600: Color(0xffee9c8e), // --danger
-    red700: Color(0xfff2b3a8),
+    red50: Color(0xff3d2121), // danger tonal background
+    red100: Color(0xff4a2727),
+    red600: Color(0xffff8f86), // danger
+    red700: Color(0xffffb4ab),
     rose500: Color(0xfffb7185),
     pink500: Color(0xfff472b6),
     purple500: Color(0xffc084fc),
     yellow400: Color(0xfffacc15),
-    sky50: Color(0xff1c2935), // --info-soft
-    sky200: Color(0xff24384a),
-    sky300: Color(0xff2f4c63),
-    sky600: Color(0xff97bce0), // --info
-    sky700: Color(0xffb0cde8),
-    sky800: Color(0xffc8ddf0),
-    emerald100: Color(0xff234437),
-    red200: Color(0xff5e332b),
-    amber300: Color(0xff7a5f2c),
+    sky50: Color(0xff1d2a3d), // info tonal background
+    sky200: Color(0xff27374f),
+    sky300: Color(0xff33486a),
+    sky600: Color(0xff8ab4f8), // info
+    sky700: Color(0xffaecbfa),
+    sky800: Color(0xffd2e3fc),
+    emerald100: Color(0xff244637),
+    red200: Color(0xff643030),
+    amber300: Color(0xff7a6230),
     blue500: Color(0xff60a5fa),
-    surface: Color(0xff18201c), // --surface
-    surface2: Color(0xff202a25), // --surface-2
-    surface3: Color(0xff2b3631), // --surface-3
-    neutralSoft: Color(0xff26302b), // --neutral-soft
-    onAccent: Color(0xff0b1712), // --on-accent
-    scrim: Color(0x94000000), // --scrim
+    surface: Color(0xff1e1e1e), // cards, sheets, navigation
+    surface2: Color(0xff2a2a2a),
+    surface3: Color(0xff383838), // empty strip, segmented track, switch off
+    neutralSoft: Color(0xff2e2e2e),
+    onAccent: Color(0xff07140e),
+    scrim: Color(0x99000000),
   );
 }
 
@@ -445,7 +448,7 @@ ThemeData buildErpTheme() {
         (s) =>
             s.contains(WidgetState.selected)
                 ? Colors.white
-                : (Tw.isDark ? const Color(0xffe2e9e5) : Colors.white),
+                : (Tw.isDark ? const Color(0xfff5f5f5) : Colors.white),
       ),
       trackColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected) ? Tw.accent : Tw.surface3,
