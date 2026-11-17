@@ -93,6 +93,22 @@ class WorkspaceRegistry {
     return w ?? (await list()).first;
   }
 
+  /// Settings ← المظهر, for the whole app: 'light', 'dark' or 'system'.
+  Future<String> appearance() async {
+    final rows = await _db.query(
+      'kv',
+      where: 'key = ?',
+      whereArgs: ['appearance'],
+    );
+    final v = rows.isEmpty ? null : '${rows.first['value']}';
+    return const ['light', 'dark', 'system'].contains(v) ? v! : 'system';
+  }
+
+  Future<void> setAppearance(String value) => _db.insert('kv', {
+    'key': 'appearance',
+    'value': value,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
+
   Future<void> setActive(int id) => _db.insert('kv', {
     'key': 'active',
     'value': '$id',

@@ -8,6 +8,7 @@ import '../data/app_database.dart';
 import '../erp/normalize.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'help.dart';
 import 'ui_kit.dart';
 
 /// Settings → the columns of the open workspace (owner's request,
@@ -132,27 +133,33 @@ class _ColumnsPageState extends State<ColumnsPage> {
       'حُفظ ربط حقول «${services.workspace.name}» وطُبِّق على شاشة التدقيق',
       ToastType.success,
     );
+    // Back to Settings, like the mockup.
+    Navigator.of(context).maybePop();
   }
 
-  /// One mapping row: label and a compact column picker.
+  /// One mapping row (`.frow`): label and a compact column picker.
   Widget _pick(
     String label,
     String value,
     ValueChanged<String> onChanged, {
     bool allowAuto = false,
-  }) => ListRow(
-    title: label,
-    trailing: SizedBox(
-      width: 104,
-      child: ErpSelect<String>(
-        muted: true,
-        options: [
-          if (allowAuto) const SelectOption('', 'تلقائي'),
-          for (final l in _letters) SelectOption(l, l),
-        ],
-        value: value,
-        onChanged: onChanged,
-      ),
+  }) => FormRow(
+    label,
+    CompactSelect<String>(
+      options: [
+        if (allowAuto) const SelectOption('', 'تلقائي'),
+        for (final l in _letters) SelectOption(l, l),
+      ],
+      value: value,
+      onChanged: onChanged,
+    ),
+  );
+
+  Widget _section(String title, Widget child, {Widget? after}) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [SectionLabel(title), child, if (after != null) after],
     ),
   );
 
@@ -162,206 +169,201 @@ class _ColumnsPageState extends State<ColumnsPage> {
     final c = _c;
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: Tw.slate50,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.white,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          shape: const Border(bottom: BorderSide(color: Tw.slate200)),
-          titleSpacing: 0,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'ربط حقول البيانات',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                  color: Tw.slate900,
-                ),
-              ),
-              Text(services.workspace.name, style: Ds.secondary),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => _show(const WorkspaceColumns()),
-              child: const Text('الافتراضي'),
-            ),
-            const InfoTip(
-              'الأعمدة الافتراضية لهذه المساحة. تُطبَّق على شاشة التدقيق عند الحفظ، ويمكن تغييرها في أي وقت.\n\nعند «تدقيق غير المذكورين» يُكتب الرقم في عمود رقم المستخدم وفي «أعمدة إضافية للرقم»، والنص في عمود اسم الوكالة وفي «أعمدة إضافية للنص».',
-              title: 'ربط حقول البيانات',
-            ),
-          ],
-        ),
-        body:
+      child: ColoredBox(
+        color: Tw.paper,
+        child:
             c == null
                 ? const Center(child: CircularProgressIndicator())
                 : ListView(
-                  padding: Ds.pagePadding,
+                  padding: const EdgeInsets.only(bottom: 32),
                   children: [
-                    const SectionLabel(
-                      'بيانات المستخدمين',
-                      icon: Icons.grid_on_outlined,
+                    // `.topbar`: back to Settings, «الافتراضي», «؟».
+                    SizedBox(
+                      height: 54,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),
+                        child: Row(
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.chevron_right, size: 22),
+                              label: const Text(
+                                'الإعدادات',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                            ),
+                            const Spacer(),
+                            HelpButton(
+                              title: 'ربط حقول البيانات',
+                              items: () => mappingHelp,
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                _show(const WorkspaceColumns());
+                                showToast(
+                                  context,
+                                  'أُعيدت الأعمدة الافتراضية. اضغط «حفظ ربط الحقول» لتطبيقها.',
+                                  ToastType.info,
+                                );
+                              },
+                              child: const Text('الافتراضي'),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                    GroupList(
-                      children: [
-                        _pick(
-                          'رقم المستخدم',
-                          c.userInfoUserIdCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoUserIdCol: v)),
-                        ),
-                        _pick(
-                          'اسم الوكالة (ورقة الوجهة)',
-                          c.userInfoTitleCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoTitleCol: v)),
-                        ),
-                        _pick(
-                          'كتابة الراتب',
-                          c.userInfoSalaryCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoSalaryCol: v)),
-                        ),
-                        _pick(
-                          'كتابة الحالة',
-                          c.userInfoStatusCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoStatusCol: v)),
-                          allowAuto: true,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    const SectionLabel(
-                      'جدول الإدارة',
-                      icon: Icons.apartment_outlined,
-                    ),
-                    GroupList(
-                      children: [
-                        _pick(
-                          'رقم المستخدم',
-                          c.mgmtUserIdCol,
-                          (v) => setState(() => _c = _with(mgmtUserIdCol: v)),
-                        ),
-                        _pick(
-                          'مبلغ الوكيل الفرعي',
-                          c.mgmtShareCol,
-                          (v) => setState(() => _c = _with(mgmtShareCol: v)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    const SectionLabel(
-                      'جدول الوكيل',
-                      icon: Icons.badge_outlined,
-                    ),
-                    GroupList(
-                      children: [
-                        _pick(
-                          'رقم المستخدم',
-                          c.agentUserIdCol,
-                          (v) => setState(() => _c = _with(agentUserIdCol: v)),
-                        ),
-                        _pick(
-                          'الراتب',
-                          c.agentSalaryCol,
-                          (v) => setState(() => _c = _with(agentSalaryCol: v)),
-                        ),
-                        _pick(
-                          'الاسم',
-                          c.agentNameCol,
-                          (v) => setState(() => _c = _with(agentNameCol: v)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    const SectionLabel(
-                      'غير المذكورين',
-                      icon: Icons.person_add_alt_outlined,
-                    ),
-                    Container(
-                      decoration: panelDecoration(),
-                      padding: const EdgeInsets.all(12),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 0),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const FieldHeader(
-                            'النص (واسم الورقة في جدول الإدارة)',
-                          ),
-                          ErpTextField(controller: _label, maxLength: 60),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const FieldHeader('أعمدة إضافية للرقم'),
-                                    ErpTextField(
-                                      controller: _idCols,
-                                      hint: 'A',
-                                      ltr: true,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const FieldHeader('أعمدة إضافية للنص'),
-                                    ErpTextField(
-                                      controller: _labelCols,
-                                      hint: 'E',
-                                      ltr: true,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          const FieldHeader(
-                            'لون سجلات الإدارة المنقولة',
-                            info:
-                                'لون السجلات التي ينقلها إجراء «٢. نقل سجلات الإدارة غير الملوّنة»: تُلوَّن به في جدول الإدارة وفي ورقة «غير مذكور» (هذه السجلات فقط) لتمييزها. لا يظهر في شاشة التدقيق.',
-                          ),
-                          ColorField(
-                            value: c.unmentionedColor,
-                            onChanged:
-                                (v) => setState(
-                                  () => _c = _with(unmentionedColor: v),
-                                ),
+                          Text('ربط حقول البيانات', style: Ds.screenTitle),
+                          const SizedBox(height: 4),
+                          Text(
+                            'أعمدة «${services.workspace.name}». تُطبَّق على شاشة التدقيق عند الحفظ.',
+                            style: TextStyle(fontSize: 14.5, color: Tw.ink2),
                           ),
                         ],
                       ),
                     ),
+                    _section(
+                      'بيانات المستخدمين',
+                      FormRows(
+                        onSurface: false,
+                        children: [
+                          _pick(
+                            'رقم المستخدم',
+                            c.userInfoUserIdCol,
+                            (v) => setState(
+                              () => _c = _with(userInfoUserIdCol: v),
+                            ),
+                          ),
+                          _pick(
+                            'اسم الوكالة (ورقة الوجهة)',
+                            c.userInfoTitleCol,
+                            (v) =>
+                                setState(() => _c = _with(userInfoTitleCol: v)),
+                          ),
+                          _pick(
+                            'كتابة الراتب',
+                            c.userInfoSalaryCol,
+                            (v) => setState(
+                              () => _c = _with(userInfoSalaryCol: v),
+                            ),
+                          ),
+                          _pick(
+                            'كتابة الحالة',
+                            c.userInfoStatusCol,
+                            (v) => setState(
+                              () => _c = _with(userInfoStatusCol: v),
+                            ),
+                            allowAuto: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                    _section(
+                      'جدول الإدارة',
+                      FormRows(
+                        onSurface: false,
+                        children: [
+                          _pick(
+                            'رقم المستخدم',
+                            c.mgmtUserIdCol,
+                            (v) => setState(() => _c = _with(mgmtUserIdCol: v)),
+                          ),
+                          _pick(
+                            'مبلغ الوكيل الفرعي',
+                            c.mgmtShareCol,
+                            (v) => setState(() => _c = _with(mgmtShareCol: v)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _section(
+                      'جدول الوكيل',
+                      FormRows(
+                        onSurface: false,
+                        children: [
+                          _pick(
+                            'رقم المستخدم',
+                            c.agentUserIdCol,
+                            (v) =>
+                                setState(() => _c = _with(agentUserIdCol: v)),
+                          ),
+                          _pick(
+                            'الراتب',
+                            c.agentSalaryCol,
+                            (v) =>
+                                setState(() => _c = _with(agentSalaryCol: v)),
+                          ),
+                          _pick(
+                            'الاسم',
+                            c.agentNameCol,
+                            (v) => setState(() => _c = _with(agentNameCol: v)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _section(
+                      'غير المذكورين',
+                      FormRows(
+                        onSurface: false,
+                        children: [
+                          FormRow(
+                            'النص (واسم الورقة في جدول الإدارة)',
+                            ErpTextField(
+                              controller: _label,
+                              thick: true,
+                              maxLength: 60,
+                            ),
+                            block: true,
+                          ),
+                          FormRow(
+                            'أعمدة إضافية للرقم',
+                            ErpTextField(
+                              controller: _idCols,
+                              thick: true,
+                              hint: 'A',
+                              ltr: true,
+                            ),
+                            block: true,
+                          ),
+                          FormRow(
+                            'أعمدة إضافية للنص',
+                            ErpTextField(
+                              controller: _labelCols,
+                              thick: true,
+                              hint: 'E',
+                              ltr: true,
+                            ),
+                            block: true,
+                          ),
+                          FormRow(
+                            'لون سجلات الإدارة المنقولة',
+                            ColorSwatchButton(
+                              value: c.unmentionedColor,
+                              onChanged:
+                                  (v) => setState(
+                                    () => _c = _with(unmentionedColor: v),
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      after: Caption(
+                        'يلوّن به إجراء «٢. نقل سجلات الإدارة غير الملوّنة» الصفوف التي ينقلها، في ورقة الإدارة ونسخها في «${_label.text.trim().isEmpty ? 'غير مذكور' : _label.text.trim()}» فقط.',
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      child: ErpButton(
+                        label: 'حفظ ربط الحقول',
+                        loading: _saving,
+                        onPressed: _save,
+                      ),
+                    ),
                   ],
-                ),
-        bottomNavigationBar:
-            c == null
-                ? null
-                : SafeArea(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      border: Border(top: BorderSide(color: Tw.slate200)),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                    child: ErpButton(
-                      label: 'حفظ ربط الحقول',
-                      icon: Icons.save_outlined,
-                      loading: _saving,
-                      onPressed: _save,
-                    ),
-                  ),
                 ),
       ),
     );

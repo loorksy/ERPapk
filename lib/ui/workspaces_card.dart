@@ -22,15 +22,18 @@ Future<String?> askWorkspaceName(
         (ctx) => Directionality(
           textDirection: TextDirection.rtl,
           child: AlertDialog(
-            title: Text(
-              title,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-            ),
+            title: Text(title),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const FieldLabel('اسم مساحة العمل'),
+                if (initial.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'لكل مساحة فتراتها وتدقيقها وإعداداتها، منفصلة عن غيرها.',
+                    ),
+                  ),
                 ErpTextField(
                   controller: c,
                   hint: 'مثال: شركة النور',
@@ -126,6 +129,52 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
     });
   }
 
+  /// `wsMenuSheet`: open, rename, delete (not the main workspace).
+  Future<void> _menu(Workspace w, int activeId) async {
+    final host = AppScope.read(context).host;
+    final v = await showAppSheet<String>(
+      context,
+      (ctx) => AppSheet(
+        title: w.name,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (w.id != activeId)
+              ChoiceTile(
+                icon: Icons.work_outline,
+                label: 'فتح المساحة',
+                onTap: () => Navigator.pop(ctx, 'open'),
+              ),
+            ChoiceTile(
+              icon: Icons.edit_outlined,
+              label: 'إعادة تسمية',
+              onTap: () => Navigator.pop(ctx, 'rename'),
+            ),
+            if (!w.isMain && w.id != activeId)
+              ChoiceTile(
+                icon: Icons.delete_outline,
+                label: 'حذف',
+                danger: true,
+                onTap: () => Navigator.pop(ctx, 'delete'),
+              ),
+            if (w.isMain)
+              const Caption(
+                'المساحة الرئيسية لا تُحذف، وفيها بيانات النسخ السابقة.',
+              )
+            else if (w.id == activeId)
+              const Caption('انتقل إلى مساحة عمل أخرى قبل حذف هذه.'),
+          ],
+        ),
+      ),
+    );
+    if (v == null || !mounted) return;
+    if (v == 'open') {
+      _run(() => host.switchTo(w.id, tab: AppTabs.settings));
+    }
+    if (v == 'rename') _rename(w);
+    if (v == 'delete') _delete(w);
+  }
+
   @override
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
@@ -134,80 +183,44 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SectionLabel(
-          'مساحات العمل',
-          icon: Icons.work_outline,
-          trailing: InfoTip(
-            'لكل مساحة عمل فتراتها وتدقيقها وإعداداتها وربط حقولها، منفصلة تمامًا عن غيرها (مثلًا شركة ثانية). حساب Google مشترك بين كل المساحات. التنقل السريع بينها من القائمة في الشريط العلوي.',
-            title: 'مساحات العمل',
-          ),
-        ),
+        const SectionLabel('مساحات العمل'),
         GroupList(
           children: [
             for (final w in host.workspaces)
               ListRow(
                 title: w.name,
-                selected: w.id == activeId,
-                titleColor: w.id == activeId ? Tw.indigo700 : null,
                 subtitle:
                     w.id == activeId
                         ? const Text('المساحة الحالية')
                         : (w.isMain ? const Text('المساحة الرئيسية') : null),
-                leading: Icon(
-                  w.id == activeId ? Icons.check_circle : Icons.work_outline,
-                  size: 22,
-                  color: w.id == activeId ? Tw.indigo600 : Tw.slate400,
-                ),
+                leading:
+                    w.id == activeId
+                        ? IconChip(
+                          Icons.check,
+                          color: Tw.accentInk,
+                          bg: Tw.accentSoft,
+                        )
+                        : IconChip(Icons.work_outline),
                 onTap:
                     _busy || w.id == activeId
                         ? null
                         : () => _run(
                           () => host.switchTo(w.id, tab: AppTabs.settings),
                         ),
-                trailing: PopupMenuButton<String>(
-                  enabled: !_busy,
-                  tooltip: 'إجراءات',
-                  icon: const Icon(
-                    Icons.more_vert,
-                    size: 20,
-                    color: Tw.slate500,
-                  ),
-                  onSelected: (v) {
-                    if (v == 'open') {
-                      _run(() => host.switchTo(w.id, tab: AppTabs.settings));
-                    }
-                    if (v == 'rename') _rename(w);
-                    if (v == 'delete') _delete(w);
-                  },
-                  itemBuilder:
-                      (_) => [
-                        if (w.id != activeId)
-                          const PopupMenuItem(
-                            value: 'open',
-                            height: 44,
-                            child: Text('فتح المساحة'),
-                          ),
-                        const PopupMenuItem(
-                          value: 'rename',
-                          height: 44,
-                          child: Text('إعادة تسمية'),
-                        ),
-                        if (!w.isMain && w.id != activeId)
-                          const PopupMenuItem(
-                            value: 'delete',
-                            height: 44,
-                            child: Text(
-                              'حذف',
-                              style: TextStyle(color: Tw.red600),
-                            ),
-                          ),
-                      ],
+                trailing: IconButton(
+                  tooltip: 'إجراءات «${w.name}»',
+                  onPressed: _busy ? null : () => _menu(w, activeId),
+                  icon: Icon(Icons.more_horiz, size: 24, color: Tw.ink2),
                 ),
               ),
             ListRow(
               title: 'مساحة عمل جديدة',
-              titleColor: Tw.indigo600,
-              leading: const Icon(Icons.add, size: 22, color: Tw.indigo600),
+              titleColor: Tw.accentInk,
+              leading: IconChip(
+                Icons.add,
+                color: Tw.accentInk,
+                bg: Tw.accentSoft,
+              ),
               onTap: _busy ? null : _add,
               trailing:
                   _busy

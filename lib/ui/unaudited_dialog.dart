@@ -7,20 +7,15 @@ import 'package:flutter/services.dart';
 import '../services/payroll_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'ui_kit.dart';
 
-/// Popup listing the agent-sheet users who are not audited yet:
-/// id (column A) and name (column C), the remaining count, and copy.
+/// The sheet (owner's mockup `unSheet`) listing the agent-sheet users who
+/// are not audited yet: id (column A) and name (column C), the remaining
+/// count, search, and copy (all, or the ids only).
 Future<void> showUnauditedDialog(
   BuildContext context,
   PendingAgentMembers data,
-) => showDialog<void>(
-  context: context,
-  builder:
-      (_) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: _UnauditedDialog(data: data),
-      ),
-);
+) => showAppSheet<void>(context, (_) => _UnauditedDialog(data: data));
 
 class _UnauditedDialog extends StatefulWidget {
   const _UnauditedDialog({required this.data});
@@ -69,151 +64,152 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
   Widget build(BuildContext context) {
     final members = widget.data.members;
     final visible = _visible;
-    final height = MediaQuery.of(context).size.height;
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: height * 0.85, maxWidth: 560),
+    const title = 'السجلات غير المدققة في جدول الوكيل';
+    if (members.isEmpty) {
+      return AppSheet(
+        title: title,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 24, 10, 12),
+          child: Column(
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: Tw.surface2,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Icon(Icons.check, size: 30, color: Tw.ink3),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'لا يوجد أرقام غير مدققة في ورقة الوكيل.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, color: Tw.ink2),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return AppSheet(
+      title: title,
+      scroll: false,
+      footer: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_copied != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                '✓ $_copied',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Tw.accentInk,
+                ),
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: ErpButton(
+                  label: 'نسخ الأرقام فقط',
+                  kind: ErpButtonKind.outline,
+                  onPressed: () => _copy(idsOnly: true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ErpButton(
+                  label: 'نسخ الكل',
+                  icon: Icons.content_copy_outlined,
+                  onPressed: () => _copy(idsOnly: false),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.6,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 14, 8, 12),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Tw.slate100)),
-              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 14),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
                 children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: Tw.amber100,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.pending_actions_outlined,
-                      size: 15,
-                      color: Tw.amber700,
+                  Text(
+                    formatCount(members.length),
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                      color: Tw.ink,
                     ),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'السجلات غير المدققة في جدول الوكيل',
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w700,
-                        color: Tw.slate900,
-                      ),
+                      'المتبقي من ${formatCount(widget.data.agentTotal)} رقم في ورقة الوكيل',
+                      style: TextStyle(fontSize: 14, color: Tw.ink2),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 18, color: Tw.slate500),
                   ),
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text.rich(
-                    TextSpan(
-                      style: const TextStyle(fontSize: 14, color: Tw.slate700),
-                      children: [
-                        const TextSpan(text: 'المتبقي: '),
-                        TextSpan(
-                          text: '${members.length}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            color: Tw.amber700,
-                            fontSize: 16,
-                          ),
-                        ),
-                        TextSpan(
-                          text:
-                              ' من ${widget.data.agentTotal} رقم في ورقة الوكيل',
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (members.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    ErpTextField(
-                      controller: _filter,
-                      hint: 'بحث برقم أو اسم',
-                      onChanged: (v) => setState(() => _query = v),
-                    ),
-                  ],
-                ],
-              ),
+            SheetSearch(
+              controller: _filter,
+              hint: 'بحث برقم أو اسم',
+              onChanged: (v) => setState(() => _query = v),
             ),
-            Flexible(
+            const SizedBox(height: 8),
+            Expanded(
               child:
-                  members.isEmpty
-                      ? const Padding(
-                        padding: EdgeInsets.all(24),
+                  visible.isEmpty
+                      ? Padding(
+                        padding: const EdgeInsets.all(28),
                         child: Text(
-                          'لا يوجد أرقام غير مدققة في ورقة الوكيل.',
+                          'لا نتائج مطابقة.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Tw.emerald700,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: TextStyle(color: Tw.ink2),
                         ),
                       )
-                      : ListView.separated(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      : ListView.builder(
                         itemCount: visible.length,
-                        separatorBuilder:
-                            (_, _) =>
-                                const Divider(height: 1, color: Tw.slate100),
                         itemBuilder: (_, i) {
                           final m = visible[i];
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 9),
+                          return Container(
+                            constraints: const BoxConstraints(minHeight: 50),
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(color: Tw.rule),
+                              ),
+                            ),
                             child: Row(
                               children: [
-                                SizedBox(
-                                  width: 34,
-                                  child: Text(
-                                    '${i + 1}',
-                                    style: const TextStyle(
-                                      fontSize: 11.5,
-                                      color: Tw.slate400,
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  flex: 4,
-                                  child: SelectableText(
-                                    m.id,
-                                    textDirection: TextDirection.ltr,
-                                    textAlign: TextAlign.right,
-                                    style: const TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: Tw.slate800,
-                                    ),
+                                SelectableText(
+                                  m.id,
+                                  textDirection: TextDirection.ltr,
+                                  style: TextStyle(
+                                    fontSize: 14.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Tw.ink,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  flex: 6,
                                   child: Text(
                                     m.name.isEmpty ? '—' : m.name,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Tw.slate600,
+                                    style: TextStyle(
+                                      fontSize: 14.5,
+                                      color: Tw.ink2,
                                     ),
                                   ),
                                 ),
@@ -223,67 +219,8 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                         },
                       ),
             ),
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Tw.slate100)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_copied != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        '✓ $_copied',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 12.5,
-                          color: Tw.emerald700,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  if (members.isNotEmpty)
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ErpButton(
-                            label: 'نسخ الكل',
-                            icon: Icons.content_copy_outlined,
-                            height: 42,
-                            fontSize: 12.5,
-                            onPressed: () => _copy(idsOnly: false),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ErpButton(
-                            label: 'نسخ الأرقام فقط',
-                            icon: Icons.tag,
-                            kind: ErpButtonKind.outline,
-                            height: 42,
-                            fontSize: 12.5,
-                            onPressed: () => _copy(idsOnly: true),
-                          ),
-                        ),
-                      ],
-                    ),
-                  if (_query.trim().isNotEmpty && members.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        'النسخ يشمل ${visible.length} نتيجة البحث فقط.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Tw.slate500,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            if (_query.trim().isNotEmpty)
+              Caption('النسخ يشمل ${visible.length} من نتائج البحث فقط.'),
           ],
         ),
       ),

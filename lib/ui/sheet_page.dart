@@ -1,15 +1,22 @@
 // Flutter 3.50 deprecates its bundled Material exports; keep the SDK widgets.
 // ignore_for_file: deprecated_member_use
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
 import '../data/file_import.dart';
 import '../erp/js_compat.dart';
+import '../erp/payroll_audit_engine.dart';
 import '../google/sheets_client.dart';
+import '../services/payroll_models.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'help.dart';
+import 'period_actions.dart';
+import 'shell.dart';
 import 'spreadsheet_link.dart';
 import 'ui_kit.dart';
 
@@ -33,14 +40,19 @@ String formatArabicDate(DateTime d) {
   return '${l.day} ${_months[l.month - 1]} ${l.year}';
 }
 
-/// «فترات الرواتب» (ERP «Sheet»): the payroll periods — each one a pair of
-/// management and agent sheets — with a summary, compact rows, their audit
-/// status and a context menu. The create window is [CycleModal].
+/// «فترات الرواتب» (ERP «Sheet»), from the owner's mockup: the latest
+/// period on top as a card with its status, the outcome strip and one
+/// button; the other periods below as rows with a small strip. The create
+/// window is [CycleModal].
 class SheetPage extends StatefulWidget {
-  const SheetPage({super.key, this.onAudit});
+  const SheetPage({super.key, this.onAudit, this.onCount});
 
-  /// Opens the audit of a period (bottom navigation «التدقيق»).
+  /// Opens the audit screen of a period.
   final ValueChanged<int>? onAudit;
+
+  /// The number of periods (the frame shows «فترة جديدة» when there are
+  /// some; the welcome state has its own button).
+  final ValueChanged<int>? onCount;
 
   @override
   State<SheetPage> createState() => SheetPageState();
@@ -49,10 +61,39 @@ class SheetPage extends StatefulWidget {
 /// Audit state of a period shown on its row.
 enum PeriodState { pending, running, audited, closed, failed }
 
+/// What the list shows for a period: its state, its latest job and the
+/// outcome of its last finished audit with the colours it was run with.
+class _PeriodInfo {
+  const _PeriodInfo(
+    this.state, {
+    this.job,
+    this.counts,
+    this.agentColor,
+    this.mgmtColor,
+  });
+  final PeriodState state;
+  final AuditJob? job;
+
+  /// total, agent, management, notFound.
+  final List<int>? counts;
+  final Color? agentColor;
+  final Color? mgmtColor;
+
+  List<StripPart> get parts =>
+      counts == null
+          ? const []
+          : [
+            (counts![1], agentColor),
+            (counts![2], mgmtColor),
+            (counts![3], null),
+          ];
+}
+
 class SheetPageState extends State<SheetPage> {
   List<Cycle>? _cycles;
-  Map<int, PeriodState> _states = const {};
+  Map<int, _PeriodInfo> _info = const {};
   int _revision = -1;
+  Timer? _poll;
 
   @override
   void didChangeDependencies() {
@@ -64,13 +105,21 @@ class SheetPageState extends State<SheetPage> {
     }
   }
 
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     final db = AppScope.read(context).db;
     final list = await db.listCycles();
-    final states = <int, PeriodState>{};
+    final info = <int, _PeriodInfo>{};
+    var running = false;
     for (final c in list) {
-      final job = await db.latestAuditJob(c.id);
-      states[c.id] =
+      final jobs = await db.auditJobsOfCycle(c.id);
+      final job = jobs.firstOrNull;
+      final state =
           job != null && job.active
               ? PeriodState.running
               : c.auditClosedAt != null
@@ -80,50 +129,66 @@ class SheetPageState extends State<SheetPage> {
               : job?.status == AuditJob.failed
               ? PeriodState.failed
               : PeriodState.pending;
+      running |= state == PeriodState.running;
+      // The strip shows the last finished audit (not a follow-up tool).
+      final audit =
+          jobs
+              .where(
+                (j) =>
+                    j.status == AuditJob.done &&
+                    JobKind.of(j.request) == JobKind.audit,
+              )
+              .firstOrNull;
+      final counts =
+          audit == null ? null : await db.getAuditJobSummaryCounts(audit.id);
+      info[c.id] = _PeriodInfo(
+        state,
+        job: job,
+        counts: counts,
+        agentColor: hexColor(
+          '${audit?.request['agentColor'] ?? defaultAgentColor}',
+        ),
+        mgmtColor: hexColor(
+          '${audit?.request['managementColor'] ?? defaultManagementColor}',
+        ),
+      );
     }
-    if (mounted) {
-      setState(() {
-        _cycles = list;
-        _states = states;
+    if (!mounted) return;
+    setState(() {
+      _cycles = list;
+      _info = info;
+    });
+    widget.onCount?.call(list.length);
+    // Follow a running audit on the card (step label and progress).
+    _poll?.cancel();
+    if (running) {
+      _poll = Timer(const Duration(seconds: 2), () {
+        if (mounted) _load();
       });
     }
   }
 
-  /// The «+» of the top bar.
+  /// «فترة جديدة».
   void openCreate() => _openModal();
 
+  /// After returning from a period's audit screen.
+  Future<void> refresh() => _load();
+
   Future<void> _openModal([Cycle? edit]) async {
-    final saved = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder:
-          (_) => Directionality(
-            textDirection: TextDirection.rtl,
-            child: CycleModal(edit: edit),
-          ),
+    final saved = await showAppSheet<bool>(
+      context,
+      (_) => CycleModal(edit: edit),
     );
     if (saved == true && mounted) AppScope.read(context).cyclesChanged();
   }
 
-  Future<void> _confirmDelete(Cycle c) async {
-    final ok = await confirmDialog(
-      context,
-      icon: Icons.delete_outline,
-      iconColor: Tw.red600,
-      iconBg: Tw.red50,
-      title: 'حذف فترة الرواتب',
-      body:
-          'سيُحذف «${c.name}» من هذا الجهاز مع حالات تدقيقها. لا يُحذف أي شيء من Google، ولا يمكن التراجع.',
-      confirmLabel: 'حذف',
-      confirmKind: ErpButtonKind.danger,
-    );
-    if (!ok || !mounted) return;
-    await AppScope.read(context).cycles.deleteCycle(c.id);
-    if (!mounted) return;
-    showToast(context, 'حُذفت فترة الرواتب', ToastType.success);
-    AppScope.read(context).cyclesChanged();
+  Future<void> _action(Cycle c, PeriodAction a) async {
+    if (a == PeriodAction.audit) {
+      widget.onAudit?.call(c.id);
+      return;
+    }
+    await runPeriodAction(context, c, a);
+    if (mounted) await _load();
   }
 
   @override
@@ -132,24 +197,25 @@ class SheetPageState extends State<SheetPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: Ds.pagePadding,
+        padding: const EdgeInsets.only(bottom: 96),
         children: [
+          ScreenHeader(title: 'فترات الرواتب', help: () => periodsHelp),
           if (cycles == null)
             const Padding(
-              padding: EdgeInsets.all(40),
+              padding: EdgeInsets.all(48),
               child: Center(child: CircularProgressIndicator()),
             )
           else if (cycles.isEmpty)
             EmptyState(
-              icon: Icons.calendar_month_outlined,
+              icon: Icons.calendar_today_outlined,
               leading: Image.asset(
                 'assets/brand/logo.png',
-                width: 56,
-                height: 56,
+                width: 84,
+                height: 84,
               ),
               title: 'مرحبًا بك في المدقق',
               message:
-                  'ابدأ بإنشاء فترة رواتب: اربط جدول الإدارة وجدول الوكيل من Google Sheets أو من ملفات Excel / CSV، ثم دقّق الرواتب عليها.',
+                  'ابدأ بإنشاء فترة رواتب: اربط جدول الإدارة وجدول الوكيل من Google Sheets أو من ملفات Excel / CSV، ثم دقّقها من هنا.',
               action: ErpButton(
                 label: 'إنشاء فترة رواتب',
                 icon: Icons.add,
@@ -158,185 +224,184 @@ class SheetPageState extends State<SheetPage> {
               ),
             )
           else ...[
-            _summary(cycles),
-            const SizedBox(height: 14),
-            SectionLabel(
-              'الفترات',
-              trailing: InfoTip(
-                'كل فترة رواتب تجمع جدول الإدارة وجدول الوكيل (من Google Sheets أو من ملفات). اضغط الفترة لتدقيقها، ومن القائمة ⋮ يمكن تعديلها أو حذفها. اسحب للأسفل للتحديث.',
-                title: 'فترات الرواتب',
-              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+              child: _hero(cycles.first),
             ),
-            GroupList(children: [for (final c in cycles) _row(c)]),
+            if (cycles.length > 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SectionLabel('الفترات السابقة'),
+                    GroupList(
+                      inset: 70,
+                      children: [for (final c in cycles.skip(1)) _row(c)],
+                    ),
+                  ],
+                ),
+              ),
           ],
         ],
       ),
     );
   }
 
-  Widget _summary(List<Cycle> cycles) {
-    int count(PeriodState s) => _states.values.where((x) => x == s).length;
-    final linked = cycles.where((c) => c.linkedToGoogle).length;
-    return Row(
-      children: [
-        Expanded(
-          child: StatTile(
-            label: 'إجمالي الفترات',
-            value: '${cycles.length}',
-            icon: Icons.layers_outlined,
-            color: Tw.indigo600,
-            selected: true,
-          ),
+  _PeriodInfo _of(Cycle c) =>
+      _info[c.id] ?? const _PeriodInfo(PeriodState.pending);
+
+  String _source(Cycle c) =>
+      c.linkedToGoogle ? ltr('Google Sheets') : 'ملفات ${ltr('Excel / CSV')}';
+
+  /// The strip of a period: the last outcome, or the running sweep.
+  Widget _strip(_PeriodInfo i, {double height = 8}) {
+    final job = i.job;
+    if (i.state == PeriodState.running && job != null) {
+      final p = job.stepTotal > 0 ? job.stepNext / job.stepTotal : 0.0;
+      return ResultStrip(parts: i.parts, height: height, progress: p);
+    }
+    return ResultStrip(parts: i.parts, height: height);
+  }
+
+  /// `.hero`: the latest period.
+  Widget _hero(Cycle c) {
+    final i = _of(c);
+    final bold = TextStyle(fontWeight: FontWeight.w700, color: Tw.ink);
+    final (InlineSpan foot, String cta) = switch (i.state) {
+      PeriodState.running => (
+        TextSpan(text: '${i.job?.progress ?? 'جاري التدقيق'}…'),
+        'متابعة التدقيق',
+      ),
+      PeriodState.failed => (
+        TextSpan(text: i.job?.error ?? 'تعذّر التدقيق'),
+        'إعادة التدقيق',
+      ),
+      _ when i.counts != null => (
+        TextSpan(
+          children: [
+            const TextSpan(text: 'السجلات المدققة '),
+            TextSpan(text: formatCount(i.counts![0]), style: bold),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: StatTile(
-            label: 'قيد التنفيذ',
-            value: '${count(PeriodState.running)}',
-            icon: Icons.sync,
-            color: Tw.slate700,
-          ),
+        'عرض النتائج',
+      ),
+      _ => (
+        TextSpan(
+          children: [
+            const TextSpan(text: 'سجلات الإدارة '),
+            TextSpan(text: formatCount(c.managementCount), style: bold),
+            const TextSpan(text: '، سجلات الوكيل '),
+            TextSpan(text: formatCount(c.agentCount), style: bold),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: StatTile(
-            label: 'مدققة',
-            value: '${count(PeriodState.audited) + count(PeriodState.closed)}',
-            icon: Icons.task_alt,
-            color: Tw.emerald600,
+        i.state == PeriodState.audited ? 'عرض النتائج' : 'تدقيق الفترة',
+      ),
+    };
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      decoration: panelDecoration(radius: Ds.radiusL),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              periodBadge(i.state),
+              const Spacer(),
+              Transform.translate(
+                offset: const Offset(-10, 0),
+                child: PeriodMenu(cycle: c, onSelected: (a) => _action(c, a)),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: StatTile(
-            label: 'Google Sheets',
-            value: '$linked',
-            icon: Icons.cloud_done_outlined,
-            color: Tw.slate700,
+          const SizedBox(height: 10),
+          Text(
+            periodName(c),
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              height: 1.35,
+              color: Tw.ink,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 2),
+          Text(
+            '${_source(c)}، ${formatArabicDate(c.createdAt)}',
+            style: TextStyle(fontSize: 14.5, color: Tw.ink2),
+          ),
+          const SizedBox(height: 18),
+          _strip(i),
+          const SizedBox(height: 10),
+          Text.rich(foot, style: TextStyle(fontSize: 14, color: Tw.ink2)),
+          const SizedBox(height: 18),
+          ErpButton(
+            label: cta,
+            onPressed:
+                widget.onAudit == null ? null : () => widget.onAudit!(c.id),
+          ),
+        ],
+      ),
     );
   }
 
-  StatusBadge _badge(PeriodState s) => switch (s) {
-    PeriodState.running => const StatusBadge(
-      'قيد التنفيذ',
-      tone: Tone.accent,
-      icon: Icons.sync,
-    ),
-    PeriodState.audited => const StatusBadge(
-      'مدققة',
-      tone: Tone.success,
-      icon: Icons.check,
-    ),
-    PeriodState.closed => const StatusBadge(
-      'مُقفلة',
-      tone: Tone.neutral,
-      icon: Icons.lock_outline,
-    ),
-    PeriodState.failed => const StatusBadge(
-      'تعذّر التدقيق',
-      tone: Tone.danger,
-      icon: Icons.error_outline,
-    ),
-    PeriodState.pending => const StatusBadge(
-      'بانتظار التدقيق',
-      tone: Tone.warning,
-      icon: Icons.schedule,
-    ),
-  };
-
+  /// `.prow`: a previous period.
   Widget _row(Cycle c) {
-    final state = _states[c.id] ?? PeriodState.pending;
+    final i = _of(c);
+    final (label, tone) = periodStatus(i.state);
+    final (_, color) = toneColors(tone);
     return ListRow(
-      title: c.name.isEmpty ? 'فترة #${c.id}' : c.name,
+      title: periodName(c),
       onTap: widget.onAudit == null ? null : () => widget.onAudit!(c.id),
       leading: IconChip(
-        Icons.table_chart_outlined,
-        size: 36,
-        color: c.linkedToGoogle ? Tw.emerald600 : Tw.slate600,
-        bg: c.linkedToGoogle ? Tw.emerald50 : Tw.slate100,
+        c.linkedToGoogle
+            ? Icons.table_chart_outlined
+            : Icons.description_outlined,
+        size: 40,
       ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          crossAxisAlignment: WrapCrossAlignment.center,
+      subtitle: Text.rich(
+        TextSpan(
           children: [
-            Text(formatArabicDate(c.createdAt)),
-            const Text('·'),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ColorDot(
-                  c.linkedToGoogle ? Tw.emerald500 : Tw.amber500,
-                  size: 8,
-                ),
-                const SizedBox(width: 4),
-                Text(c.linkedToGoogle ? 'Google Sheets' : 'ملفات محلية'),
-              ],
+            TextSpan(
+              text: label,
+              style: TextStyle(fontWeight: FontWeight.w700, color: color),
             ),
-            const Text('·'),
-            Text('${c.managementCount} / ${c.agentCount} سجل'),
-            if (c.transferDiscountPct > 0) ...[
-              const Text('·'),
-              Text('خصم ${jsNumberToString(c.transferDiscountPct)}%'),
-            ],
-            _badge(state),
+            TextSpan(text: '، ${formatArabicDate(c.createdAt)}'),
           ],
         ),
       ),
-      trailing: PopupMenuButton<String>(
-        tooltip: 'إجراءات',
-        icon: const Icon(Icons.more_vert, size: 20, color: Tw.slate500),
-        onSelected: (v) {
-          if (v == 'audit') widget.onAudit?.call(c.id);
-          if (v == 'edit') _openModal(c);
-          if (v == 'delete') _confirmDelete(c);
-        },
-        itemBuilder:
-            (_) => const [
-              PopupMenuItem(
-                value: 'audit',
-                height: 44,
-                child: _MenuLine(Icons.fact_check_outlined, 'تدقيق الفترة'),
-              ),
-              PopupMenuItem(
-                value: 'edit',
-                height: 44,
-                child: _MenuLine(Icons.edit_outlined, 'تعديل'),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                height: 44,
-                child: _MenuLine(Icons.delete_outline, 'حذف', color: Tw.red600),
-              ),
-            ],
+      below: Padding(
+        padding: const EdgeInsets.only(top: 9),
+        child: _strip(i, height: 4),
       ),
+      trailing: PeriodMenu(cycle: c, onSelected: (a) => _action(c, a)),
     );
   }
 }
 
-class _MenuLine extends StatelessWidget {
-  const _MenuLine(this.icon, this.label, {this.color = Tw.slate900});
-  final IconData icon;
-  final String label;
-  final Color color;
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Icon(icon, size: 18, color: color == Tw.slate900 ? Tw.slate500 : color),
-      const SizedBox(width: 10),
-      Text(label, style: TextStyle(fontSize: 14, color: color)),
-    ],
+/// The label and tone of a period state (`statusOf` in the mockup).
+(String, Tone) periodStatus(PeriodState s) => switch (s) {
+  PeriodState.running => ('قيد التنفيذ', Tone.info),
+  PeriodState.audited => ('مدققة', Tone.success),
+  PeriodState.closed => ('مُقفلة', Tone.neutral),
+  PeriodState.failed => ('تعذّر التدقيق', Tone.danger),
+  PeriodState.pending => ('بانتظار التدقيق', Tone.warning),
+};
+
+/// `.pill` of a period state.
+StatusBadge periodBadge(PeriodState s) {
+  final (label, tone) = periodStatus(s);
+  return StatusBadge(
+    label,
+    tone: tone,
+    icon: switch (s) {
+      PeriodState.running => Icons.sync,
+      PeriodState.audited => Icons.check,
+      PeriodState.closed => Icons.lock_outline,
+      PeriodState.failed => Icons.error_outline,
+      PeriodState.pending => Icons.schedule,
+    },
   );
 }
-
-// ======================================================================
-// Create / edit modal
-// ======================================================================
 
 class CycleModal extends StatefulWidget {
   const CycleModal({super.key, this.edit});
@@ -612,400 +677,259 @@ class _CycleModalState extends State<CycleModal> {
     }
   }
 
+  // ------------------------------------------------------------------ UI
+  // Owner's mockup (`npSheet`): the source as a segmented choice, the two
+  // table / sheet pairs (or the two files), «جلب البيانات», then the record
+  // counts, the name and the transfer discount, with «إلغاء» / «حفظ».
+
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).viewInsets.bottom;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottom),
-      child: Container(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.92,
-        ),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _header(),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (_googleTab) ..._googlePanel() else ..._uploadPanel(),
-                    if (_showSave) ...[
-                      const SizedBox(height: 12),
-                      _savePanel(),
-                    ],
-                  ],
+    final failed =
+        _googleTab && _listMessage != null && !_listMessage!.contains('جاري');
+    return AppSheet(
+      title: widget.edit == null ? 'فترة رواتب جديدة' : 'تعديل فترة الرواتب',
+      actions: [HelpButton(title: 'فترة الرواتب', items: () => newPeriodHelp)],
+      footer:
+          _showSave
+              ? Row(
+                children: [
+                  ErpButton(
+                    label: 'إلغاء',
+                    kind: ErpButtonKind.outline,
+                    expand: false,
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ErpButton(
+                      label: 'حفظ',
+                      loadingLabel: 'جاري الحفظ...',
+                      loading: _saving,
+                      onPressed: _save,
+                    ),
+                  ),
+                ],
+              )
+              : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SegmentedChoice(
+            options: const ['Google Sheets', 'ملفات Excel / CSV'],
+            selected: _googleTab ? 0 : 1,
+            onChanged: (i) {
+              if (i == 0) {
+                setState(() => _googleTab = true);
+                _loadSpreadsheets();
+              } else {
+                setState(() => _googleTab = false);
+              }
+            },
+          ),
+          if (_googleTab) ...[
+            if (failed)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: NoticeBox(
+                  bg: Tw.warnSoft,
+                  child: Text(
+                    'سجّل الدخول بحساب Google من الإعدادات لاختيار الجداول، أو استخدم ملفات Excel / CSV. ($_listMessage)',
+                    style: TextStyle(color: Tw.warn),
+                  ),
                 ),
               ),
-            ),
-            _footer(),
+            const SheetLabel('جدول الإدارة'),
+            _ssPair(true),
+            const SheetLabel('جدول الوكيل'),
+            _ssPair(false),
+          ] else ...[
+            const SheetLabel('ملف جدول الإدارة'),
+            _filePicker(true),
+            const SheetLabel('ملف جدول الوكيل'),
+            _filePicker(false),
           ],
-        ),
+          const SizedBox(height: 16),
+          if (!_showSave)
+            ErpButton(
+              label: _googleTab ? 'جلب البيانات' : 'تحميل الملفات',
+              loadingLabel: _googleTab ? 'جاري الجلب…' : 'جاري القراءة…',
+              icon:
+                  _googleTab
+                      ? Icons.cloud_outlined
+                      : Icons.description_outlined,
+              kind: ErpButtonKind.indigoSoft,
+              loading: _busy,
+              onPressed: _primary,
+            )
+          else
+            _savePanel(),
+        ],
       ),
     );
   }
 
-  Widget _header() => Container(
-    decoration: const BoxDecoration(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      border: Border(bottom: BorderSide(color: Tw.slate200)),
-    ),
-    padding: const EdgeInsets.fromLTRB(14, 8, 6, 10),
-    child: Column(
+  /// `.pair`: the spreadsheet (1.4) and its sheet (1).
+  Widget _ssPair(bool mgmt) {
+    final ss = mgmt ? _mgmtSs : _agentSs;
+    final sheet = mgmt ? _mgmtSheet : _agentSheet;
+    final sheets = mgmt ? _mgmtSheets : _agentSheets;
+    return Row(
       children: [
-        const SheetHandle(),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                widget.edit == null ? 'فترة رواتب جديدة' : 'تعديل فترة الرواتب',
-                style: Ds.title,
-              ),
-            ),
-            const InfoTip(
-              'Google Sheets: اختر جدول وورقة الإدارة وجدول وورقة الوكيل من حسابك (أو الصق رابط الجدول)، ثم «جلب البيانات». الملفات: اختر ملفي Excel أو CSV للإدارة والوكيل. بعد القراءة اكتب اسم الفترة واحفظ.',
-              title: 'فترة الرواتب',
-            ),
-            IconButton(
-              tooltip: 'إغلاق',
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.close, size: 20, color: Tw.slate500),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Container(
-          height: 44,
-          padding: const EdgeInsets.all(3),
-          margin: const EdgeInsetsDirectional.only(end: 8),
-          decoration: BoxDecoration(
-            color: Tw.slate100,
-            borderRadius: BorderRadius.circular(12),
+        Expanded(
+          flex: 14,
+          child: ErpSelect<String>(
+            options: _ssOptions(),
+            value: ss,
+            onChanged: (picked) async {
+              var v = picked;
+              if (v == pasteLinkValue) {
+                final f = await askSpreadsheetLink(context, _s.sheets);
+                if (f == null || !mounted) return;
+                setState(() {
+                  _files = [f, ..._files.where((x) => x.id != f.id)];
+                  _listMessage = null;
+                });
+                v = f.id;
+              }
+              setState(() {
+                if (mgmt) {
+                  _mgmtSs = v;
+                  _mgmtSheet = '';
+                } else {
+                  _agentSs = v;
+                  _agentSheet = '';
+                }
+              });
+              _loadSheets(mgmt, v);
+            },
           ),
-          child: Row(
-            children: [
-              _tab('Google Sheets', Icons.cloud_outlined, _googleTab, () {
-                setState(() => _googleTab = true);
-                _loadSpreadsheets();
-              }),
-              _tab(
-                'ملفات Excel / CSV',
-                Icons.upload_file_outlined,
-                !_googleTab,
-                () => setState(() => _googleTab = false),
-              ),
-            ],
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 10,
+          child: ErpSelect<String>(
+            options: _sheetOptions(sheets, sheet),
+            value: sheet,
+            onChanged:
+                (v) => setState(() => mgmt ? _mgmtSheet = v : _agentSheet = v),
           ),
         ),
       ],
-    ),
-  );
+    );
+  }
 
-  Widget _tab(String label, IconData icon, bool active, VoidCallback onTap) =>
-      Expanded(
-        child: GestureDetector(
-          onTap: onTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            decoration: BoxDecoration(
-              color: active ? Colors.white : Colors.transparent,
-              borderRadius: BorderRadius.circular(9),
-              border: active ? Border.all(color: Tw.slate200) : null,
-            ),
+  /// `.filepick`.
+  Widget _filePicker(bool mgmt) {
+    final f = mgmt ? _mgmtFile : _agentFile;
+    final on = f != null;
+    return Material(
+      color: on ? Tw.accentSoft : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: on ? Tw.accentSoft : Tw.surface3, width: 1.5),
+      ),
+      child: InkWell(
+        onTap: () => _pick(mgmt),
+        borderRadius: BorderRadius.circular(16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  icon,
-                  size: 17,
-                  color: active ? Tw.indigo600 : Tw.slate500,
+                  Icons.description_outlined,
+                  size: 22,
+                  color: on ? Tw.accentInk : Tw.ink2,
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                    color: active ? Tw.indigo700 : Tw.slate500,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        on ? f.fileName : 'اختيار ملف',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Tw.ink,
+                        ),
+                      ),
+                      Text(
+                        on
+                            ? '${formatCount(f.firstSheetRows.length)} صف في الورقة الأولى'
+                            : 'لم يتم اختيار ملف (.xlsx, .csv)',
+                        style: TextStyle(fontSize: 13, color: Tw.ink2),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
         ),
-      );
-
-  List<Widget> _googlePanel() => [
-    _sourceBox(
-      title: 'جدول الإدارة',
-      icon: Icons.apartment_outlined,
-      bg: const Color(0x66fffbeb),
-      border: Tw.amber200,
-      iconBg: Tw.amber100,
-      iconFg: Tw.amber700,
-      child: _ssPair(true),
-    ),
-    const SizedBox(height: 12),
-    _sourceBox(
-      title: 'جدول الوكيل',
-      icon: Icons.badge_outlined,
-      bg: const Color(0x80eef2ff),
-      border: Tw.indigo200,
-      iconBg: Tw.indigo100,
-      iconFg: Tw.indigo700,
-      child: _ssPair(false),
-    ),
-  ];
-
-  Widget _ssPair(bool mgmt) {
-    final ss = mgmt ? _mgmtSs : _agentSs;
-    final sheet = mgmt ? _mgmtSheet : _agentSheet;
-    final sheets = mgmt ? _mgmtSheets : _agentSheets;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const FieldLabel('الجدول', small: true, bold: true),
-              ErpSelect<String>(
-                thick: true,
-                options: _ssOptions(),
-                value: ss,
-                onChanged: (picked) async {
-                  var v = picked;
-                  if (v == pasteLinkValue) {
-                    final f = await askSpreadsheetLink(context, _s.sheets);
-                    if (f == null || !mounted) return;
-                    setState(() {
-                      _files = [f, ..._files.where((x) => x.id != f.id)];
-                      _listMessage = null;
-                    });
-                    v = f.id;
-                  }
-                  setState(() {
-                    if (mgmt) {
-                      _mgmtSs = v;
-                      _mgmtSheet = '';
-                    } else {
-                      _agentSs = v;
-                      _agentSheet = '';
-                    }
-                  });
-                  _loadSheets(mgmt, v);
-                },
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const FieldLabel('الورقة', small: true, bold: true),
-              ErpSelect<String>(
-                thick: true,
-                options: _sheetOptions(sheets, sheet),
-                value: sheet,
-                onChanged:
-                    (v) =>
-                        setState(() => mgmt ? _mgmtSheet = v : _agentSheet = v),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _sourceBox({
-    required String title,
-    required IconData icon,
-    required Color bg,
-    required Color border,
-    required Color iconBg,
-    required Color iconFg,
-    required Widget child,
-  }) => Container(
-    decoration: panelDecoration(),
-    padding: const EdgeInsets.all(12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            IconChip(icon, color: iconFg, bg: iconBg, size: 28),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-                color: Tw.slate900,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        child,
-      ],
-    ),
-  );
-
-  List<Widget> _uploadPanel() => [
-    _sourceBox(
-      title: 'ملف جدول الإدارة',
-      icon: Icons.description_outlined,
-      bg: const Color(0x66fffbeb),
-      border: Tw.amber200,
-      iconBg: Tw.amber100,
-      iconFg: Tw.amber700,
-      child: _filePicker(true),
-    ),
-    const SizedBox(height: 12),
-    _sourceBox(
-      title: 'ملف جدول الوكيل',
-      icon: Icons.description_outlined,
-      bg: const Color(0x80eef2ff),
-      border: Tw.indigo200,
-      iconBg: Tw.indigo100,
-      iconFg: Tw.indigo700,
-      child: _filePicker(false),
-    ),
-  ];
-
-  Widget _filePicker(bool mgmt) {
-    final f = mgmt ? _mgmtFile : _agentFile;
-    return InkWell(
-      onTap: () => _pick(mgmt),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Tw.slate200),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: mgmt ? Tw.amber100 : Tw.indigo100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                'اختيار ملف',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: mgmt ? Tw.amber900 : Tw.indigo900,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                f == null
-                    ? 'لم يتم اختيار ملف (.xlsx, .csv)'
-                    : '${f.fileName} — ${f.firstSheetRows.length} صف',
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, color: Tw.slate600),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
 
-  Widget _savePanel() => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: panelDecoration(),
-    child: Column(
+  /// `.fetched` + the name and the transfer discount.
+  Widget _savePanel() {
+    final b = TextStyle(fontSize: 15, fontWeight: FontWeight.w700);
+    String n(String v) =>
+        int.tryParse(v) == null ? v : formatCount(int.parse(v));
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(child: _countTile('سجلات الإدارة', _mgmtCount)),
-            const SizedBox(width: 8),
-            Expanded(child: _countTile('سجلات الوكيل', _agentCount)),
-          ],
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Tw.accentSoft,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: DefaultTextStyle.merge(
+            style: TextStyle(fontSize: 14, color: Tw.accentInk),
+            child: Wrap(
+              spacing: 14,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Icon(Icons.check, size: 18, color: Tw.accentInk),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      const TextSpan(text: 'سجلات الإدارة '),
+                      TextSpan(text: n(_mgmtCount), style: b),
+                    ],
+                  ),
+                ),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      const TextSpan(text: 'سجلات الوكيل '),
+                      TextSpan(text: n(_agentCount), style: b),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         const FieldHeader('اسم الفترة'),
         ErpTextField(controller: _name, hint: 'مثال: رواتب يناير 2026'),
-        const SizedBox(height: 10),
-        const FieldHeader(
-          'نسبة خصم التحويل (%)',
-          info:
-              'تُحفظ مع الفترة كما في النظام. خصم التدقيق نفسه يُحدَّد من شاشة التدقيق ← إعداد التدقيق.',
-        ),
+        const SizedBox(height: 12),
+        const FieldHeader('نسبة خصم التحويل (%)'),
         ErpTextField(
           controller: _discount,
           hint: '0',
           ltr: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
         ),
+        const Caption(
+          'تُحفظ مع الفترة. خصم التدقيق نفسه يُحدَّد من «إعداد التدقيق».',
+        ),
       ],
-    ),
-  );
-
-  Widget _countTile(String label, String count) =>
-      StatTile(label: label, value: count, color: Tw.indigo600);
-
-  Widget _footer() => Container(
-    decoration: const BoxDecoration(
-      border: Border(top: BorderSide(color: Tw.slate100)),
-    ),
-    padding: EdgeInsets.fromLTRB(
-      12,
-      10,
-      12,
-      10 + MediaQuery.of(context).padding.bottom,
-    ),
-    child:
-        !_showSave
-            ? ErpButton(
-              label: _googleTab ? 'جلب البيانات' : 'تحميل الملفات',
-              loadingLabel: _googleTab ? 'جاري الجلب...' : 'جاري القراءة...',
-              icon:
-                  _googleTab
-                      ? Icons.cloud_download_outlined
-                      : Icons.upload_file_outlined,
-              kind: ErpButtonKind.indigo,
-              loading: _busy,
-              onPressed: _primary,
-            )
-            : Row(
-              children: [
-                Expanded(
-                  child: ErpButton(
-                    label: 'إلغاء',
-                    kind: ErpButtonKind.soft,
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ErpButton(
-                    label: 'حفظ',
-                    loadingLabel: 'جاري الحفظ...',
-                    icon: Icons.save_outlined,
-                    loading: _saving,
-                    onPressed: _save,
-                  ),
-                ),
-              ],
-            ),
-  );
+    );
+  }
 }

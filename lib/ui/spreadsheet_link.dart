@@ -122,11 +122,7 @@ class _LinkDialogState extends State<_LinkDialog> {
             const SizedBox(height: 10),
             Text(
               _error!,
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: Tw.red700,
-                height: 1.5,
-              ),
+              style: TextStyle(fontSize: 12.5, color: Tw.red700, height: 1.5),
             ),
           ],
         ],

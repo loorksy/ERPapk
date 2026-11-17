@@ -612,6 +612,19 @@ class AppDatabase {
     return rows.isEmpty ? null : AuditJob.fromRow(rows.first);
   }
 
+  /// Read only: the jobs of a cycle, newest first (periods list).
+  Future<List<AuditJob>> auditJobsOfCycle(int cycleId, {int limit = 20}) async {
+    final rows = await _db.query(
+      'audit_jobs',
+      columns: _jobSummaryColumns,
+      where: 'cycle_id = ?',
+      whereArgs: [cycleId],
+      orderBy: 'id DESC',
+      limit: limit,
+    );
+    return rows.map(AuditJob.fromRow).toList();
+  }
+
   Future<AuditJob?> latestAuditJob(int cycleId) async {
     final rows = await _db.query(
       'audit_jobs',
@@ -669,6 +682,24 @@ class AppDatabase {
 
   Future<Map<String, Object?>?> getAuditJobResult(int id) async =>
       AuditJob._json(await getBlob(_jobKey(id, 'result')));
+
+  /// Read only: the outcome counts of a job's saved result (total, agent,
+  /// management, notFound) for the periods list, taken from the first part
+  /// of the saved JSON so the per-user rows are not loaded.
+  Future<List<int>?> getAuditJobSummaryCounts(int id) async {
+    final rows = await _db.query(
+      'blobs',
+      columns: ['data'],
+      where: 'key = ? AND idx = 0',
+      whereArgs: [_jobKey(id, 'result')],
+    );
+    if (rows.isEmpty) return null;
+    final m = RegExp(
+      r'"summary":\{"total":(\d+),"agent":(\d+),"management":(\d+),"notFound":(\d+)\}',
+    ).firstMatch(rows.first['data'] as String);
+    if (m == null) return null;
+    return [for (var g = 1; g <= 4; g++) int.parse(m.group(g)!)];
+  }
 
   // ---------------------------------------------------------------- cycles
 

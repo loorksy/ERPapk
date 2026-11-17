@@ -2,6 +2,7 @@
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_services.dart';
@@ -21,8 +22,56 @@ class AuditApplication extends StatefulWidget {
   State<AuditApplication> createState() => _AuditApplicationState();
 }
 
-class _AuditApplicationState extends State<AuditApplication> {
+class _AuditApplicationState extends State<AuditApplication>
+    with WidgetsBindingObserver {
   late final Future<AppHost> _host = AppHost.open();
+  bool? _dark;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// «حسب الجهاز» follows the phone when it switches light/dark.
+  @override
+  void didChangePlatformBrightness() => setState(() {});
+
+  /// Applies the palette of Settings ← المظهر. Every screen reads its
+  /// colours from [Tw], so after a change every element is rebuilt once
+  /// (without losing the open screens or their state).
+  void _applyAppearance(String appearance) {
+    final platformDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+    final dark =
+        appearance == 'dark' || (appearance == 'system' && platformDark);
+    if (dark == _dark) return;
+    final first = _dark == null;
+    _dark = dark;
+    Tw.palette = dark ? TwPalette.dark : TwPalette.light;
+    SystemChrome.setSystemUIOverlayStyle(
+      (dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark).copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Tw.surface,
+      ),
+    );
+    if (first) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      void rebuild(Element e) {
+        e.markNeedsBuild();
+        e.visitChildren(rebuild);
+      }
+
+      if (mounted) (context as Element).visitChildren(rebuild);
+    });
+  }
 
   MaterialApp _app(Widget home) => MaterialApp(
     title: 'المدقق',
@@ -58,6 +107,7 @@ class _AuditApplicationState extends State<AuditApplication> {
       return ListenableBuilder(
         listenable: host,
         builder: (context, _) {
+          _applyAppearance(host.appearance);
           final services = host.active;
           // AppScope sits above the Navigator so dialogs and bottom sheets
           // (new routes) can reach the database and the Google connection

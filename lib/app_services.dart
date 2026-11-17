@@ -30,6 +30,7 @@ class AppHost extends ChangeNotifier {
     final auth = GoogleAuth();
     final host = AppHost._(registry, auth, GoogleSheetsApi(auth));
     host._workspaces = await registry.list();
+    host._appearance = await registry.appearance();
     host._active = await host._servicesFor(await registry.active());
     // Restoring the previous Google session must not block the app.
     auth.restore();
@@ -45,7 +46,18 @@ class AppHost extends ChangeNotifier {
   List<Workspace> _workspaces = const [];
 
   /// Tab shown after switching workspace (the switch rebuilds the app).
-  int initialTab = 1;
+  int initialTab = 0;
+
+  String _appearance = 'system';
+
+  /// Settings ← المظهر: 'light', 'dark' or 'system' (follow the phone).
+  String get appearance => _appearance;
+
+  Future<void> setAppearance(String value) async {
+    _appearance = value;
+    await registry.setAppearance(value);
+    notifyListeners();
+  }
 
   AppServices get active => _active;
   List<Workspace> get workspaces => _workspaces;
@@ -59,7 +71,7 @@ class AppHost extends ChangeNotifier {
     return _open[w.id] = AppServices._(db, auth, sheets, w, this);
   }
 
-  Future<void> switchTo(int id, {int tab = 1}) async {
+  Future<void> switchTo(int id, {int tab = 0}) async {
     if (id == _active.workspace.id) return;
     final w = await registry.get(id);
     if (w == null) return;

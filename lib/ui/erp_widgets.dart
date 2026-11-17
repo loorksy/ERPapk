@@ -1,6 +1,8 @@
 // Flutter 3.50 deprecates its bundled Material exports; keep the SDK widgets.
 // ignore_for_file: deprecated_member_use
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,55 +12,102 @@ import 'erp_theme.dart';
 
 enum ToastType { success, error, warning, info }
 
-/// ERP `showToast(message, type)`.
+OverlayEntry? _toastEntry;
+Timer? _toastTimer;
+
+/// ERP `showToast(message, type)`, drawn like the mockup's `.toast`: ink
+/// background, paper text, one icon, above the bottom navigation and above
+/// any open sheet (it lives in the root overlay).
 void showToast(
   BuildContext context,
   String message, [
   ToastType type = ToastType.info,
 ]) {
-  final (bg, fg, icon) = switch (type) {
-    ToastType.success => (
-      Tw.emerald600,
-      Colors.white,
-      Icons.check_circle_outline,
-    ),
-    ToastType.error => (Tw.red600, Colors.white, Icons.error_outline),
-    ToastType.warning => (
-      Tw.amber500,
-      Colors.white,
-      Icons.warning_amber_outlined,
-    ),
-    ToastType.info => (Tw.slate800, Colors.white, Icons.info_outline),
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return;
+  final icon = switch (type) {
+    ToastType.success => Icons.check,
+    ToastType.error => Icons.error_outline,
+    ToastType.warning => Icons.warning_amber_outlined,
+    ToastType.info => Icons.info_outline,
   };
-  final messenger = ScaffoldMessenger.maybeOf(context);
-  if (messenger == null) return;
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        backgroundColor: bg,
-        margin: const EdgeInsets.fromLTRB(12, 0, 12, 76),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        duration: Duration(seconds: type == ToastType.error ? 6 : 4),
-        content: Row(
-          children: [
-            Icon(icon, color: fg, size: 16),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(
-                  color: fg,
-                  fontFamily: erpFont,
-                  fontSize: 13.5,
-                  height: 1.4,
+  _toastTimer?.cancel();
+  final old = _toastEntry;
+  if (old != null && old.mounted) old.remove();
+  final entry = OverlayEntry(
+    builder: (ctx) => _ToastView(message: message, icon: icon),
+  );
+  overlay.insert(entry);
+  _toastEntry = entry;
+  _toastTimer = Timer(Duration(seconds: type == ToastType.error ? 6 : 4), () {
+    if (entry.mounted) entry.remove();
+    if (identical(_toastEntry, entry)) _toastEntry = null;
+  });
+}
+
+class _ToastView extends StatelessWidget {
+  const _ToastView({required this.message, required this.icon});
+  final String message;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewPadding.bottom;
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: 88 + bottom,
+      child: IgnorePointer(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 220),
+          builder:
+              (_, t, child) => Opacity(
+                opacity: t,
+                child: Transform.translate(
+                  offset: Offset(0, 14 * (1 - t)),
+                  child: child,
+                ),
+              ),
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Material(
+              color: Tw.ink,
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 13,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      icon,
+                      size: 18,
+                      color: Tw.paper.withValues(alpha: 0.9),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        message,
+                        style: TextStyle(
+                          color: Tw.paper,
+                          fontFamily: erpFont,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w500,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
+  }
 }
 
 // ------------------------------------------------------------------ cards
@@ -79,9 +128,8 @@ class ErpCard extends StatelessWidget {
     clipBehavior: clip ? Clip.antiAlias : Clip.none,
     // Same surface as the panels of ui_kit.dart: white, hairline border.
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Tw.slate200),
+      color: Tw.surface,
+      borderRadius: BorderRadius.circular(20),
     ),
     padding: padding,
     child: child,
@@ -104,7 +152,7 @@ class CardSection extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: double.infinity,
     decoration: BoxDecoration(
-      border: top ? const Border(top: BorderSide(color: Tw.slate200)) : null,
+      border: top ? Border(top: BorderSide(color: Tw.slate200)) : null,
     ),
     padding: padding,
     child: child,
@@ -130,9 +178,9 @@ class FieldLabel extends StatelessWidget {
     child: Text(
       text,
       style: TextStyle(
-        fontSize: small ? 12 : 14,
-        fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
-        color: small && !bold ? Tw.slate600 : Tw.slate700,
+        fontSize: small ? 13.5 : 15,
+        fontWeight: bold || small ? FontWeight.w700 : FontWeight.w500,
+        color: small ? Tw.ink2 : Tw.ink,
       ),
     ),
   );
@@ -146,11 +194,7 @@ class SectionCaption extends StatelessWidget {
     padding: const EdgeInsets.only(bottom: 12),
     child: Text(
       text,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        color: Tw.slate500,
-      ),
+      style: TextStyle(fontSize: 13, height: 1.65, color: Tw.ink2),
     ),
   );
 }
@@ -181,7 +225,8 @@ class ErpSelect<T> extends StatelessWidget {
   final bool muted;
   final bool enabled;
 
-  /// `border-2 rounded-xl` variant used in the Sheet / search pages.
+  /// `.pad > .sel-wrap.wide`: a white select without a border, on the page
+  /// background (the inquiry period).
   final bool thick;
 
   @override
@@ -189,9 +234,13 @@ class ErpSelect<T> extends StatelessWidget {
     final has = options.any((o) => o.value == value);
     final effective =
         has ? value : (options.isEmpty ? null : options.first.value);
-    // One compact style for every select (3.0): 44 px high, 12 px corners.
-    final radius = BorderRadius.circular(12);
-    const side = BorderSide(color: Tw.slate200);
+    // `.pair select` / `.sel-wrap.wide` of the mockup: a filled field
+    // without a border, 13 px corners, 48 px high.
+    final radius = BorderRadius.circular(13);
+    final side = BorderSide(
+      color: muted && !thick ? Tw.rule : Colors.transparent,
+      width: 1.5,
+    );
     final callback =
         !enabled || onChanged == null
             ? null
@@ -204,10 +253,10 @@ class ErpSelect<T> extends StatelessWidget {
       isEmpty: false,
       decoration: InputDecoration(
         filled: true,
-        fillColor: muted ? Tw.slate50 : Colors.white,
+        fillColor: muted || thick ? Tw.surface : Tw.surface2,
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 11,
+          horizontal: 14,
+          vertical: 13,
         ),
         border: OutlineInputBorder(borderRadius: radius, borderSide: side),
         enabledBorder: OutlineInputBorder(
@@ -225,13 +274,14 @@ class ErpSelect<T> extends StatelessWidget {
           isExpanded: true,
           isDense: true,
           menuMaxHeight: 420,
-          icon: const Icon(Icons.expand_more, size: 20, color: Tw.slate500),
-          dropdownColor: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          style: const TextStyle(
+          icon: Icon(Icons.expand_more, size: 18, color: Tw.ink2),
+          dropdownColor: Tw.surface,
+          borderRadius: BorderRadius.circular(14),
+          style: TextStyle(
             fontFamily: erpFont,
-            fontSize: 14,
-            color: Tw.slate900,
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            color: Tw.ink,
           ),
           items: [
             for (final o in options)
@@ -269,9 +319,9 @@ class ErpButton extends StatelessWidget {
     this.kind = ErpButtonKind.indigo,
     this.loading = false,
     this.loadingLabel,
-    this.height = 44,
+    this.height = 52,
     this.expand = true,
-    this.fontSize = 14,
+    this.fontSize,
   });
 
   final String label;
@@ -282,20 +332,24 @@ class ErpButton extends StatelessWidget {
   final String? loadingLabel;
   final double height;
   final bool expand;
-  final double fontSize;
+  final double? fontSize;
 
   @override
   Widget build(BuildContext context) {
-    final (bg, fg, border) = switch (kind) {
-      ErpButtonKind.indigo => (Tw.indigo600, Colors.white, null),
-      ErpButtonKind.emerald => (Tw.emerald600, Colors.white, null),
-      ErpButtonKind.amber => (Tw.amber600, Colors.white, null),
-      ErpButtonKind.slate => (Tw.slate900, Colors.white, null),
-      ErpButtonKind.danger => (Tw.red600, Colors.white, null),
-      ErpButtonKind.outline => (Colors.white, Tw.slate900, Tw.slate200),
-      ErpButtonKind.soft => (Tw.slate100, Tw.slate700, null),
-      ErpButtonKind.indigoSoft => (Tw.indigo50, Tw.indigo700, null),
+    // `.btn-primary`, `.btn-secondary`, `.btn-quiet`, `.btn-danger`.
+    final (bg, fg) = switch (kind) {
+      ErpButtonKind.indigo || ErpButtonKind.emerald => (Tw.accent, Tw.onAccent),
+      ErpButtonKind.indigoSoft => (Tw.accentSoft, Tw.accentInk),
+      ErpButtonKind.outline => (Colors.transparent, Tw.accentInk),
+      ErpButtonKind.soft => (Tw.surface2, Tw.ink),
+      ErpButtonKind.amber => (Tw.warnSoft, Tw.warn),
+      ErpButtonKind.slate => (Tw.ink, Tw.paper),
+      ErpButtonKind.danger => (
+        Tw.danger,
+        Tw.isDark ? const Color(0xff1a0d0a) : Colors.white,
+      ),
     };
+    final radius = BorderRadius.circular(height <= 42 ? 12 : 16);
     final disabled = onPressed == null || loading;
     final child = Row(
       mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
@@ -308,14 +362,7 @@ class ErpButton extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2, color: fg),
           )
         else if (icon != null)
-          Icon(
-            icon,
-            size: 18,
-            color:
-                kind == ErpButtonKind.outline
-                    ? Tw.slate500
-                    : fg.withValues(alpha: 0.95),
-          ),
+          Icon(icon, size: height <= 42 ? 17 : 19, color: fg),
         if (loading || icon != null) const SizedBox(width: 8),
         Flexible(
           child: Text(
@@ -323,8 +370,8 @@ class ErpButton extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontFamily: erpFont,
-              fontWeight: FontWeight.w600,
-              fontSize: fontSize,
+              fontWeight: FontWeight.w700,
+              fontSize: fontSize ?? (height <= 42 ? 14.5 : 16),
               color: fg,
             ),
           ),
@@ -332,22 +379,18 @@ class ErpButton extends StatelessWidget {
       ],
     );
     return Opacity(
-      opacity: disabled && !loading ? 0.6 : 1,
+      opacity: disabled && !loading ? 0.42 : 1,
       child: SizedBox(
         height: height,
         width: expand ? double.infinity : null,
         child: Material(
           color: bg,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: radius,
           child: InkWell(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: radius,
             onTap: disabled ? null : onPressed,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: border == null ? null : Border.all(color: border),
-              ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: height <= 42 ? 14 : 20),
               child: child,
             ),
           ),
@@ -382,8 +425,8 @@ class ErpTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(12);
-    const side = BorderSide(color: Tw.slate200);
+    final radius = BorderRadius.circular(13);
+    const side = BorderSide(color: Colors.transparent, width: 1.5);
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
@@ -391,13 +434,16 @@ class ErpTextField extends StatelessWidget {
       onChanged: onChanged,
       maxLength: maxLength,
       style: TextStyle(
-        fontSize: 14,
-        color: Tw.slate900,
+        fontSize: 16,
+        fontWeight: FontWeight.w500,
+        color: Tw.ink,
         fontFamily: mono ? 'monospace' : erpFont,
       ),
       decoration: InputDecoration(
         hintText: hint,
         counterText: '',
+        filled: true,
+        fillColor: thick ? Tw.surface : Tw.surface2,
         border: OutlineInputBorder(borderRadius: radius, borderSide: side),
         enabledBorder: OutlineInputBorder(
           borderRadius: radius,
@@ -405,7 +451,7 @@ class ErpTextField extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: radius,
-          borderSide: const BorderSide(color: Tw.indigo600, width: 1.5),
+          borderSide: BorderSide(color: Tw.accent, width: 1.5),
         ),
       ),
     );
@@ -452,15 +498,15 @@ class _ColorFieldState extends State<ColorField> {
     children: [
       InkWell(
         onTap: _pick,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         child: Container(
           width: 44,
           height: 44,
-          padding: const EdgeInsets.all(5),
+          padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Tw.slate200),
-            color: Colors.white,
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(color: Tw.rule, width: 1.5),
+            color: Tw.surface,
           ),
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -524,36 +570,63 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
     '#fed7aa',
   ];
 
+  late final _hex = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _hex.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) => AlertDialog(
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-    title: const Text(
-      'اختر اللون',
-      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-    ),
+    title: const Text('اختر اللون'),
     content: SizedBox(
       width: 300,
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final c in _palette)
-            InkWell(
-              onTap: () => setState(() => _value = c),
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: hexColor(c),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final c in _palette)
+                InkWell(
+                  onTap:
+                      () => setState(() {
+                        _value = c;
+                        _hex.text = c;
+                      }),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: _value == c ? Tw.slate900 : Tw.slate200,
-                    width: _value == c ? 3 : 1,
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: hexColor(c),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: _value == c ? Tw.ink : Tw.rule,
+                        width: _value == c ? 3 : 1,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ErpTextField(
+            controller: _hex,
+            ltr: true,
+            mono: true,
+            maxLength: 7,
+            hint: '#8b5cf6',
+            onChanged: (v) {
+              if (RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(v)) {
+                setState(() => _value = v.toLowerCase());
+              }
+            },
+          ),
         ],
       ),
     ),
@@ -563,7 +636,10 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
         child: const Text('إلغاء'),
       ),
       FilledButton(
-        style: FilledButton.styleFrom(backgroundColor: Tw.indigo600),
+        style: FilledButton.styleFrom(
+          backgroundColor: Tw.accent,
+          foregroundColor: Tw.onAccent,
+        ),
         onPressed: () => Navigator.pop(context, _value),
         child: const Text('اختيار'),
       ),
@@ -588,39 +664,39 @@ class ErpBadge extends StatelessWidget {
   final Color fg;
   final Color border;
 
-  factory ErpBadge.google() => const ErpBadge(
+  factory ErpBadge.google() => ErpBadge(
     label: 'مرتبطة بـ Google',
     icon: Icons.link,
-    bg: Tw.emerald50,
-    fg: Tw.emerald800,
-    border: Tw.emerald200,
+    bg: Tw.accentSoft,
+    fg: Tw.accentInk,
+    border: Colors.transparent,
   );
 
-  factory ErpBadge.local() => const ErpBadge(
+  factory ErpBadge.local() => ErpBadge(
     label: 'ملفات محلية',
     icon: Icons.description_outlined,
-    bg: Tw.amber50,
-    fg: Tw.amber900,
-    border: Tw.amber200,
+    bg: Tw.neutralSoft,
+    fg: Tw.ink2,
+    border: Colors.transparent,
   );
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+    height: 24,
+    padding: const EdgeInsets.symmetric(horizontal: 9),
     decoration: BoxDecoration(
       color: bg,
       borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: border),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 10, color: fg),
-        const SizedBox(width: 4),
+        Icon(icon, size: 13, color: fg),
+        const SizedBox(width: 5),
         Text(
           label,
           style: TextStyle(
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: FontWeight.w700,
             color: fg,
           ),
@@ -637,13 +713,14 @@ Future<String?> pasteText() async {
 
 /// `rounded-xl border bg-… p-3` notice boxes.
 class NoticeBox extends StatelessWidget {
-  const NoticeBox({
+  NoticeBox({
     super.key,
     required this.child,
-    this.bg = Tw.slate50,
-    this.border = Tw.slate200,
-    this.padding = const EdgeInsets.all(12),
-  });
+    Color? bg,
+    Color? border,
+    this.padding = const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+  }) : bg = bg ?? Tw.surface2,
+       border = border ?? Colors.transparent;
   final Widget child;
   final Color bg;
   final Color border;
@@ -655,10 +732,12 @@ class NoticeBox extends StatelessWidget {
     padding: padding,
     decoration: BoxDecoration(
       color: bg,
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: border),
+      borderRadius: BorderRadius.circular(14),
     ),
-    child: child,
+    child: DefaultTextStyle.merge(
+      style: const TextStyle(fontSize: 14, height: 1.6),
+      child: child,
+    ),
   );
 }
 
@@ -669,73 +748,62 @@ Future<bool> confirmDialog(
   required String title,
   required String body,
   required String confirmLabel,
-  Color iconColor = Tw.indigo600,
-  Color iconBg = Tw.indigo50,
+  Color? iconColor,
+  Color? iconBg,
   ErpButtonKind confirmKind = ErpButtonKind.indigo,
 }) async {
+  // `.dialog` of the mockup: title, text, then «إلغاء» and the action at
+  // the end. ([icon], [iconColor] and [iconBg] are kept for the callers.)
   final ok = await showDialog<bool>(
     context: context,
     builder:
         (ctx) => Directionality(
           textDirection: TextDirection.rtl,
           child: Dialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 22),
             child: Padding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 14),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: iconBg,
-                        shape: BoxShape.circle,
-                      ),
-                      alignment: Alignment.center,
-                      child: Icon(icon, color: iconColor, size: 22),
-                    ),
-                    const SizedBox(height: 14),
                     Text(
                       title,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Tw.slate900,
+                      style: TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        height: 1.4,
+                        color: Tw.ink,
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     Text(
                       body,
-                      style: const TextStyle(
-                        fontSize: 13.5,
-                        color: Tw.slate600,
-                        height: 1.7,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Tw.ink2,
+                        height: 1.75,
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 18),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        Expanded(
-                          child: ErpButton(
-                            label: confirmLabel,
-                            kind: confirmKind,
-                            height: 42,
-                            onPressed: () => Navigator.pop(ctx, true),
-                          ),
+                        ErpButton(
+                          label: 'إلغاء',
+                          kind: ErpButtonKind.outline,
+                          height: 40,
+                          expand: false,
+                          onPressed: () => Navigator.pop(ctx, false),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: ErpButton(
-                            label: 'إلغاء',
-                            kind: ErpButtonKind.outline,
-                            height: 42,
-                            onPressed: () => Navigator.pop(ctx, false),
-                          ),
+                        const SizedBox(width: 6),
+                        ErpButton(
+                          label: confirmLabel,
+                          kind: confirmKind,
+                          height: 40,
+                          expand: false,
+                          onPressed: () => Navigator.pop(ctx, true),
                         ),
                       ],
                     ),
@@ -747,4 +815,287 @@ Future<bool> confirmDialog(
         ),
   );
   return ok == true;
+}
+
+// ------------------------------------------------- mockup form controls
+
+/// `.sel-wrap.col`: a compact select at the end of a form row; the field
+/// shows [shown] of the value (e.g. the column letter) and the menu the
+/// full labels.
+class CompactSelect<T> extends StatelessWidget {
+  const CompactSelect({
+    super.key,
+    required this.options,
+    required this.value,
+    required this.onChanged,
+    this.shown,
+    this.maxWidth = 150,
+  });
+  final List<SelectOption<T>> options;
+  final T value;
+  final ValueChanged<T>? onChanged;
+  final String Function(T value)? shown;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final has = options.any((o) => o.value == value);
+    final effective =
+        has ? value : (options.isEmpty ? null : options.first.value);
+    String label(SelectOption<T> o) => shown?.call(o.value) ?? o.label;
+    return ConstrainedBox(
+      constraints: BoxConstraints(minWidth: 74, maxWidth: maxWidth),
+      child: Container(
+        height: 42,
+        padding: const EdgeInsetsDirectional.only(start: 12, end: 6),
+        decoration: BoxDecoration(
+          color: Tw.surface,
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(color: Tw.rule, width: 1.5),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<T>(
+            value: effective,
+            isExpanded: true,
+            isDense: true,
+            menuMaxHeight: 420,
+            icon: Icon(Icons.expand_more, size: 16, color: Tw.ink2),
+            dropdownColor: Tw.surface,
+            borderRadius: BorderRadius.circular(14),
+            style: TextStyle(
+              fontFamily: erpFont,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Tw.ink,
+            ),
+            selectedItemBuilder:
+                (_) => [
+                  for (final o in options)
+                    Align(
+                      alignment: Alignment.center,
+                      child: Text(
+                        label(o),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+            items: [
+              for (final o in options)
+                DropdownMenuItem<T>(
+                  value: o.value,
+                  child: Text(
+                    o.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                ),
+            ],
+            onChanged:
+                onChanged == null
+                    ? null
+                    : (T? v) {
+                      if (v != null || null is T) onChanged!(v as T);
+                    },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.num-input`: a small centred number field.
+class NumberBox extends StatelessWidget {
+  const NumberBox({super.key, required this.controller, this.onChanged});
+  final TextEditingController controller;
+  final ValueChanged<String>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(11);
+    return SizedBox(
+      height: 42,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          color: Tw.ink,
+        ),
+        decoration: InputDecoration(
+          filled: true,
+          fillColor: Tw.surface,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          border: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.rule, width: 1.5),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.rule, width: 1.5),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.accent, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.swatch`: the colour and its hex; opens the colour picker (palette or
+/// a typed hex).
+class ColorSwatchButton extends StatelessWidget {
+  const ColorSwatchButton({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    borderRadius: BorderRadius.circular(11),
+    onTap: () async {
+      final picked = await showDialog<String>(
+        context: context,
+        builder: (_) => _ColorPickerDialog(initial: value),
+      );
+      if (picked != null) onChanged(picked);
+    },
+    child: Container(
+      height: 42,
+      padding: const EdgeInsetsDirectional.only(start: 6, end: 12),
+      decoration: BoxDecoration(
+        color: Tw.surface,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Tw.rule, width: 1.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: hexColor(value),
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            value,
+            textDirection: TextDirection.ltr,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: Tw.ink2,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// `.chip`: a filter with its count.
+class FilterPill extends StatelessWidget {
+  const FilterPill({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final String count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: selected ? Tw.accentSoft : Colors.transparent,
+    shape: StadiumBorder(
+      side: BorderSide(color: selected ? Tw.accent : Tw.rule, width: 1.5),
+    ),
+    child: InkWell(
+      customBorder: const StadiumBorder(),
+      onTap: onTap,
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
+        alignment: Alignment.center,
+        child: Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: '$label '),
+              TextSpan(
+                text: count,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: selected ? Tw.accentInk : Tw.ink,
+                ),
+              ),
+            ],
+          ),
+          style: TextStyle(
+            fontSize: 14,
+            color: selected ? Tw.accentInk : Tw.ink2,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// `.sheet-search`: the search field inside a sheet.
+class SheetSearch extends StatelessWidget {
+  const SheetSearch({
+    super.key,
+    required this.hint,
+    required this.onChanged,
+    this.controller,
+  });
+  final String hint;
+  final ValueChanged<String> onChanged;
+  final TextEditingController? controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(14);
+    return SizedBox(
+      height: 48,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        style: TextStyle(fontSize: 16, color: Tw.ink),
+        decoration: InputDecoration(
+          hintText: hint,
+          filled: true,
+          fillColor: Tw.surface2,
+          prefixIcon: Icon(Icons.search, size: 18, color: Tw.ink3),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.accent, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
 }

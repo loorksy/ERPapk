@@ -15,6 +15,8 @@ import '../google/sheets_client.dart';
 import '../services/adjustments_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'help.dart';
+import 'shell.dart';
 import 'spreadsheet_link.dart';
 import 'ui_kit.dart';
 
@@ -261,34 +263,24 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     await _showResults(out);
   }
 
-  Future<void> _showResults(AdjustOutcome out) => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+  Future<void> _showResults(AdjustOutcome out) => showAppSheet<void>(
+    context,
+    (_) => _ResultsDialog(
+      out,
+      jobId: _lastJobId,
+      spreadsheetId: _lastSsId,
+      onChanged: (o) {
+        if (mounted) setState(() => _last = o);
+      },
     ),
-    builder:
-        (_) => Directionality(
-          textDirection: TextDirection.rtl,
-          child: _ResultsDialog(
-            out,
-            jobId: _lastJobId,
-            spreadsheetId: _lastSsId,
-            onChanged: (o) {
-              if (mounted) setState(() => _last = o);
-            },
-          ),
-        ),
   );
 
   // ------------------------------------------------------------------ UI
   //
-  // «Compact Fluid UI» (3.0): an editor — where the salaries are, the list
-  // with live counts, one primary action — and the last results as a
-  // summary that opens the full report in a bottom sheet.
-
-  bool _mappingOpen = false;
+  // Owner's mockup (`screenAdjust`): «جدول الرواتب» as two rows that open
+  // sheets (the table and sheet, the field mapping), the list editor with
+  // live counters, one primary action (or the run card), and «آخر تطبيق»
+  // as three figures with «عرض التقرير».
 
   List<SelectOption<String>> get _letterOptions => [
     for (final l in _letters) SelectOption(l, l),
@@ -300,6 +292,121 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     setState(() => _bulk.text = t);
     _saveDraft();
   }
+
+  String get _tableName =>
+      _files.where((f) => f.id == _ssId).map((f) => f.name).firstOrNull ??
+      (_ssId.isEmpty ? 'اختر الجدول' : _ssId);
+
+  /// `adjTableSheet`: the spreadsheet and the sheet of the salaries.
+  Future<void> _openTableSheet() => showAppSheet<void>(
+    context,
+    (ctx) => StatefulBuilder(
+      builder:
+          (ctx, setLocal) => AppSheet(
+            title: 'جدول الرواتب',
+            footer: ErpButton(label: 'تم', onPressed: () => Navigator.pop(ctx)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'الجدول والورقة التي فيها رواتب المستخدمين، وعادة تكون بيانات المستخدمين. يُعدَّل فيها عمودا الراتب والحالة.',
+                  style: TextStyle(fontSize: 14.5, height: 1.7, color: Tw.ink2),
+                ),
+                const SizedBox(height: 14),
+                FormRows(
+                  children: [
+                    FormRow(
+                      'الجدول',
+                      ErpSelect<String>(
+                        muted: true,
+                        options: [
+                          SelectOption(
+                            '',
+                            _ssMessage ?? '— اختر جدول البيانات —',
+                          ),
+                          const SelectOption(pasteLinkValue, pasteLinkLabel),
+                          for (final f in _files) SelectOption(f.id, f.name),
+                          if (_ssId.isNotEmpty &&
+                              !_files.any((f) => f.id == _ssId))
+                            SelectOption(_ssId, _ssId),
+                        ],
+                        value: _ssId,
+                        onChanged: (v) async {
+                          await _onSpreadsheet(v);
+                          setLocal(() {});
+                        },
+                      ),
+                      block: true,
+                    ),
+                    FormRow(
+                      'الورقة',
+                      ErpSelect<String>(
+                        muted: true,
+                        options: [
+                          if (_sheetNames.isEmpty)
+                            SelectOption('', _sheetMessage ?? 'لا توجد أوراق'),
+                          for (final n in _sheetNames) SelectOption(n, n),
+                          if (_sheet.isNotEmpty &&
+                              !_sheetNames.contains(_sheet))
+                            SelectOption(_sheet, _sheet),
+                        ],
+                        value: _sheet,
+                        onChanged: (v) {
+                          setState(() => _sheet = v);
+                          setLocal(() {});
+                          _saveDraft();
+                        },
+                      ),
+                      block: true,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+    ),
+  );
+
+  /// `adjColsSheet`: the id, salary and status columns.
+  Future<void> _openColumnsSheet() => showAppSheet<void>(
+    context,
+    (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) {
+        Widget col(String label, String value, void Function(String) set) =>
+            FormRow(
+              label,
+              CompactSelect<String>(
+                options: _letterOptions,
+                value: value,
+                onChanged: (v) {
+                  setState(() => set(v));
+                  setLocal(() {});
+                  _saveDraft();
+                },
+              ),
+            );
+        return AppSheet(
+          title: 'ربط الحقول',
+          footer: ErpButton(label: 'تم', onPressed: () => Navigator.pop(ctx)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FormRows(
+                children: [
+                  col('المعرّف', _idCol, (v) => _idCol = v),
+                  col('الراتب', _salaryCol, (v) => _salaryCol = v),
+                  col('الحالة', _statusCol, (v) => _statusCol = v),
+                ],
+              ),
+              const Caption(
+                'أعمدة جدول الرواتب: رقم المستخدم، والراتب الذي يُعدَّل، والحالة التي يُكتب فيها «تم خصم» أو «تم اضافة».',
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -314,339 +421,285 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
       byId.putIfAbsent(l.userId, () => {}).add(l.isDeduction);
     }
     final netted = byId.values.where((s) => s.length == 2).length;
+    final connected = AppScope.of(context).auth.isConnected;
+    Widget section(String title, Widget child, {Widget? trailing}) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [SectionLabel(title, trailing: trailing), child],
+      ),
+    );
     return ListView(
-      padding: Ds.pagePadding,
+      padding: const EdgeInsets.only(bottom: 32),
       children: [
-        const SectionLabel(
+        ScreenHeader(title: 'تسويات الرواتب', help: () => adjustmentsHelp),
+        section(
           'جدول الرواتب',
-          trailing: InfoTip(
-            'الجدول والورقة التي فيها رواتب المستخدمين (عادة بيانات المستخدمين). يُعدَّل فيها عمود الراتب ويُكتب عمود الحالة، ومنها تُنشأ ورقة «إضافات وخصومات» عند التصدير.',
-            title: 'جدول الرواتب',
-          ),
-        ),
-        Container(
-          decoration: panelDecoration(),
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          GroupList(
             children: [
-              ErpSelect<String>(
-                options: [
-                  SelectOption('', _ssMessage ?? '— اختر جدول البيانات —'),
-                  const SelectOption(pasteLinkValue, pasteLinkLabel),
-                  for (final f in _files) SelectOption(f.id, f.name),
-                  if (_ssId.isNotEmpty && !_files.any((f) => f.id == _ssId))
-                    SelectOption(_ssId, _ssId),
-                ],
-                value: _ssId,
-                onChanged: _onSpreadsheet,
-              ),
-              const SizedBox(height: 8),
-              ErpSelect<String>(
-                muted: true,
-                options: [
-                  if (_sheetNames.isEmpty)
-                    SelectOption('', _sheetMessage ?? 'لا توجد أوراق'),
-                  for (final n in _sheetNames) SelectOption(n, n),
-                  if (_sheet.isNotEmpty && !_sheetNames.contains(_sheet))
-                    SelectOption(_sheet, _sheet),
-                ],
-                value: _sheet,
-                onChanged: (v) {
-                  setState(() => _sheet = v);
-                  _saveDraft();
-                },
-              ),
-              InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: () => setState(() => _mappingOpen = !_mappingOpen),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.view_column_outlined,
-                        size: 18,
-                        color: Tw.slate500,
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'ربط الحقول',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Tw.slate700,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SummaryText(
-                          'المعرّف $_idCol · الراتب $_salaryCol · الحالة $_statusCol',
-                        ),
-                      ),
-                      AnimatedRotation(
-                        turns: _mappingOpen ? 0.5 : 0,
-                        duration: const Duration(milliseconds: 180),
-                        child: const Icon(
-                          Icons.expand_more,
-                          size: 20,
-                          color: Tw.slate400,
-                        ),
-                      ),
-                    ],
+              if (connected)
+                ListRow(
+                  enabled: !busy,
+                  leading: IconChip(Icons.table_chart_outlined),
+                  title: _tableName,
+                  subtitle: Text(
+                    _sheet.isNotEmpty ? _sheet : (_sheetMessage ?? ''),
                   ),
-                ),
-              ),
-              if (_mappingOpen)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    children: [
-                      for (final (i, label, value, set) in [
-                        (0, 'المعرّف', _idCol, (String v) => _idCol = v),
-                        (1, 'الراتب', _salaryCol, (String v) => _salaryCol = v),
-                        (2, 'الحالة', _statusCol, (String v) => _statusCol = v),
-                      ]) ...[
-                        if (i > 0) const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              FieldHeader(label),
-                              ErpSelect<String>(
-                                muted: true,
-                                options: _letterOptions,
-                                value: value,
-                                onChanged: (v) {
-                                  setState(() => set(v));
-                                  _saveDraft();
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ],
+                  trailing: const RowChevron(),
+                  onTap: _openTableSheet,
+                )
+              else
+                ListRow(
+                  leading: IconChip(Icons.cloud_outlined),
+                  title: 'لم يتم تسجيل الدخول بـ Google',
+                  subtitle: Text(
+                    'اربط حسابك من الإعدادات',
+                    style: TextStyle(color: Tw.warn),
                   ),
+                  trailing: const RowChevron(),
+                  onTap:
+                      () => ShellScope.maybeOf(context)?.goTo(AppTabs.settings),
                 ),
+              ListRow(
+                enabled: !busy,
+                leading: IconChip(Icons.view_column_outlined),
+                title: 'ربط الحقول',
+                subtitle: Text(
+                  'المعرّف $_idCol، الراتب $_salaryCol، الحالة $_statusCol',
+                ),
+                trailing: const RowChevron(),
+                onTap: _openColumnsSheet,
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 14),
-        SectionLabel(
+        section(
           'قائمة التسويات',
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: 'لصق',
-                visualDensity: VisualDensity.compact,
-                onPressed: _paste,
-                icon: const Icon(
-                  Icons.content_paste_outlined,
-                  size: 18,
-                  color: Tw.slate500,
-                ),
+              TextButton.icon(
+                onPressed: busy ? null : _paste,
+                icon: const Icon(Icons.content_paste_outlined, size: 17),
+                label: const Text('لصق'),
               ),
-              if (_bulk.text.isNotEmpty)
-                IconButton(
-                  tooltip: 'مسح القائمة',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () {
-                    setState(_bulk.clear);
-                    _saveDraft();
-                  },
-                  icon: const Icon(
-                    Icons.backspace_outlined,
-                    size: 18,
-                    color: Tw.slate500,
-                  ),
-                ),
-              const InfoTip(
-                'كل سطر: رقم المستخدم ← النوع ← المبلغ، مفصولة بـTab (كما تُنسخ من Excel) أو بمسافات. النوع «خصم» يخصم، وأي نوع آخر (اضافة، إضافة…) يضيف. للخصم الكامل: «12345  خصم كامل» بدون مبلغ.\n\nالمقاصة: إذا جاء نفس الرقم بإضافة وخصم في القائمة نفسها تُجمع عملياته أولًا (الإضافات ناقص الخصومات) وتُطبَّق مرة واحدة، ويُكتب في عمود الحالة «تم خصم …» أو «تم اضافة …» مع تفاصيل المقاصة.\n\nيعمل التطبيق في الخلفية، وإذا انقطع الإنترنت يُستأنف دون تكرار أي إضافة أو خصم.',
-                title: 'قائمة التسويات',
+              TextButton.icon(
+                onPressed:
+                    busy || _bulk.text.isEmpty
+                        ? null
+                        : () {
+                          setState(_bulk.clear);
+                          _saveDraft();
+                        },
+                icon: const Icon(Icons.close, size: 17),
+                label: const Text('مسح'),
               ),
             ],
           ),
-        ),
-        Container(
-          decoration: panelDecoration(),
-          padding: const EdgeInsets.all(12),
-          child: Column(
+          Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextField(
-                controller: _bulk,
-                minLines: 6,
-                maxLines: 14,
-                textDirection: TextDirection.ltr,
-                keyboardType: TextInputType.multiline,
-                onChanged: (_) {
-                  setState(() {});
-                  _saveDraft();
-                },
-                style: const TextStyle(fontSize: 14, height: 1.5),
-                decoration: const InputDecoration(
-                  hintText: '12345\tخصم\t50',
-                  hintTextDirection: TextDirection.ltr,
-                  fillColor: Tw.slate50,
+              _editor(lines.length, adds, deds, full, netted, busy),
+              const Caption(
+                'كل سطر: رقم المستخدم، ثم النوع، ثم المبلغ، كما تُنسخ من Excel.',
+              ),
+              const SizedBox(height: 12),
+              if (job != null && job.active)
+                _jobBox(job)
+              else
+                ErpButton(
+                  label: 'تطبيق التسويات',
+                  icon: Icons.play_arrow_rounded,
+                  onPressed: lines.isEmpty ? null : _run,
                 ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  StatusBadge('${lines.length} سطر'),
-                  StatusBadge('إضافة $adds', tone: Tone.success),
-                  StatusBadge('خصم $deds', tone: Tone.warning),
-                  if (full > 0)
-                    StatusBadge('خصم كامل $full', tone: Tone.danger),
-                  if (netted > 0)
-                    StatusBadge(
-                      'مقاصة $netted',
-                      tone: Tone.accent,
-                      icon: Icons.compare_arrows,
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              ErpButton(
-                label: 'تطبيق التسويات',
-                icon: Icons.play_arrow_rounded,
-                loading: busy,
-                loadingLabel: 'جاري التطبيق…',
-                onPressed: lines.isEmpty ? null : _run,
-              ),
             ],
           ),
         ),
-        if (job != null && job.active) ...[gap, _jobBox(job)],
-        if (_last != null && !busy) ...[
-          const SizedBox(height: 14),
-          _lastCard(_last!),
-        ],
+        if (_last != null && !busy) _lastCard(_last!),
       ],
     );
   }
 
+  /// `.editor`: the list with its counters.
+  Widget _editor(int n, int adds, int deds, int full, int netted, bool busy) {
+    Widget cnt(String t, {bool lead = false}) => Container(
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: lead ? Tw.neutralSoft : Tw.surface2,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Center(
+        widthFactor: 1,
+        child: Text(
+          t,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: lead ? Tw.ink : Tw.ink2,
+          ),
+        ),
+      ),
+    );
+    return Container(
+      decoration: BoxDecoration(
+        color: Tw.surface,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _bulk,
+            readOnly: busy,
+            minLines: 7,
+            maxLines: 14,
+            keyboardType: TextInputType.multiline,
+            onChanged: (_) {
+              setState(() {});
+              _saveDraft();
+            },
+            style: TextStyle(fontSize: 16.5, height: 1.95, color: Tw.ink),
+            decoration: InputDecoration(
+              hintText: '12345   خصم   50',
+              filled: true,
+              fillColor: Tw.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 14,
+              ),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: OutlineInputBorder(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(22),
+                ),
+                borderSide: BorderSide(color: Tw.accent, width: 1.5),
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Tw.rule)),
+            ),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                cnt('$n سطر', lead: true),
+                if (adds > 0) cnt('إضافة $adds'),
+                if (deds > 0) cnt('خصم $deds'),
+                if (full > 0) cnt('خصم كامل $full'),
+                if (netted > 0) cnt('مقاصة $netted'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// `آخر تطبيق`.
   Widget _lastCard(AdjustOutcome out) {
     final s = out.summary ?? AdjustmentsService.summarize(out.results);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionLabel('آخر تطبيق'),
-        Container(
-          decoration: panelDecoration(),
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: StatTile(
-                      label: 'الإضافات',
-                      value: AdjustmentsService.money(s.totalAdded),
-                      color: Tw.emerald600,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: StatTile(
-                      label: 'الخصومات المنفّذة',
-                      value: AdjustmentsService.money(s.totalDeducted),
-                      color: Tw.indigo600,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: StatTile(
-                      label: 'المبالغ المستحقة',
-                      value: AdjustmentsService.money(s.totalDebt),
-                      color: Tw.amber700,
-                    ),
-                  ),
-                ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionLabel(
+            'آخر تطبيق',
+            trailing: Text(
+              '${out.results.length} عملية${out.pushed ? '، مُصدّرة إلى «${out.pushedSheet}»' : ''}',
+            ),
+          ),
+          FigsRow(
+            figs: [
+              (AdjustmentsService.money(s.totalAdded), 'الإضافات', null),
+              (
+                AdjustmentsService.money(s.totalDeducted),
+                'الخصومات المنفّذة',
+                null,
               ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${out.results.length} عملية${out.pushed ? ' · مُصدّرة إلى «${out.pushedSheet}»' : ''}',
-                      style: Ds.secondary,
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => _showResults(out),
-                    icon: const Icon(Icons.assignment_outlined, size: 17),
-                    label: const Text('التقرير'),
-                  ),
-                ],
-              ),
+              (AdjustmentsService.money(s.totalDebt), 'المبالغ المستحقة', null),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: 8),
+          ErpButton(
+            label: 'عرض التقرير',
+            icon: Icons.format_list_bulleted,
+            kind: ErpButtonKind.outline,
+            onPressed: () => _showResults(out),
+          ),
+        ],
+      ),
     );
   }
 
+  /// `.run-card` of the adjustments.
   Widget _jobBox(AuditJob job) {
     final waiting = job.status == AuditJob.waiting;
     final total = job.stepTotal;
     final done = job.stepNext.clamp(0, total);
     return Container(
-      decoration: panelDecoration(border: waiting ? Tw.amber200 : null),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      decoration: panelDecoration(radius: Ds.radiusL),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              ProgressRing(
-                value: total > 0 ? done / total : null,
-                size: 48,
-                color: waiting ? Tw.amber500 : Tw.indigo600,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      waiting
-                          ? 'التطبيق متوقف — بانتظار الاتصال'
-                          : 'جاري تطبيق التسويات…',
-                      style: Ds.title,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      job.progress ?? '',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Ds.secondary,
-                    ),
-                  ],
-                ),
-              ),
-              const InfoTip(
-                'يمكنك إغلاق التطبيق: يكمل العمل في الخلفية، وإذا انقطع الإنترنت يُستأنف دون تكرار أي إضافة أو خصم.',
-                title: 'العمل في الخلفية',
-              ),
-            ],
+          Text(
+            waiting ? 'بانتظار الاتصال' : 'جاري تطبيق التسويات…',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Tw.ink,
+            ),
           ),
-          if (waiting) ...[
-            const SizedBox(height: 8),
-            ErpButton(
-              label: 'استئناف الآن',
-              icon: Icons.play_arrow_rounded,
-              kind: ErpButtonKind.amber,
-              height: 40,
-              fontSize: 13.5,
-              onPressed: () => _s.resumeAuditJobs(now: true),
+          const SizedBox(height: 14),
+          ProgressLine(value: total > 0 ? done / total : null),
+          if ((job.progress ?? '').isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if (waiting) ...[
+                  Icon(Icons.wifi_off, size: 18, color: Tw.warn),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: Text(
+                    job.progress!,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: waiting ? Tw.warn : Tw.ink,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
+          if (waiting) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: ErpButton(
+                label: 'استئناف الآن',
+                icon: Icons.sync,
+                kind: ErpButtonKind.indigoSoft,
+                height: 40,
+                expand: false,
+                onPressed: () => _s.resumeAuditJobs(now: true),
+              ),
+            ),
+          ],
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Text(
+              'يمكنك إغلاق التطبيق: يكمل العمل في الخلفية، وإذا انقطع الإنترنت يُستأنف دون تكرار أي خصم أو إضافة.',
+              style: Ds.caption,
+            ),
+          ),
         ],
       ),
     );
@@ -723,176 +776,120 @@ class _ResultsDialogState extends State<_ResultsDialog> {
   @override
   Widget build(BuildContext context) {
     final s = out.summary ?? AdjustmentsService.summarize(out.results);
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const SizedBox(height: 8),
-          const SheetHandle(),
+    final head = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FigsRow(
+          flat: true,
+          figs: [
+            (AdjustmentsService.money(s.totalAdded), 'الإضافات', null),
+            (
+              AdjustmentsService.money(s.totalDeducted),
+              'الخصومات المنفّذة',
+              null,
+            ),
+            (AdjustmentsService.money(s.totalDebt), 'المبالغ المستحقة', null),
+          ],
+        ),
+        if (s.debtUsers.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 6, 4),
+            padding: const EdgeInsets.fromLTRB(4, 12, 4, 14),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Expanded(
-                  child: Text('تقرير تطبيق التسويات', style: Ds.title),
-                ),
-                IconButton(
-                  tooltip: 'نسخ الجدول والملخص',
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(
-                        text: AdjustmentsService.copyText(out.results, s),
-                      ),
-                    );
-                    if (context.mounted) {
-                      showToast(
-                        context,
-                        'نُسخ الجدول والملخص — الصقه في Excel.',
-                        ToastType.success,
-                      );
-                    }
-                  },
-                  icon: const Icon(
-                    Icons.content_copy_outlined,
-                    size: 20,
-                    color: Tw.slate600,
+                Icon(Icons.warning_amber_outlined, size: 18, color: Tw.warn),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'مستحقات على: ${s.debtUsers.join('، ')}',
+                    style: TextStyle(fontSize: 14, color: Tw.warn),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'إغلاق',
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, size: 20, color: Tw.slate500),
-                ),
               ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: StatTile(
-                        label: 'الإضافات',
-                        value: AdjustmentsService.money(s.totalAdded),
-                        color: Tw.emerald600,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: StatTile(
-                        label: 'الخصومات المنفّذة',
-                        value: AdjustmentsService.money(s.totalDeducted),
-                        color: Tw.indigo600,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: StatTile(
-                        label: 'المبالغ المستحقة',
-                        value: AdjustmentsService.money(s.totalDebt),
-                        color: Tw.amber700,
-                      ),
-                    ),
-                  ],
-                ),
-                if (s.debtUsers.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text.rich(
-                    TextSpan(
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        color: Tw.slate600,
-                        height: 1.5,
-                      ),
-                      children: [
-                        const TextSpan(
-                          text: 'مستحقات على: ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: Tw.amber800,
-                          ),
-                        ),
-                        TextSpan(text: s.debtUsers.join(' ، ')),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 10),
-                out.pushed
-                    ? ErpButton(
-                      label: 'فتح ورقة «${out.pushedSheet}»',
-                      icon: Icons.open_in_new,
-                      kind: ErpButtonKind.outline,
-                      height: 42,
-                      fontSize: 13.5,
-                      onPressed: _open,
-                    )
-                    : ActionWithInfo(
-                      title: 'تصدير إلى Google Sheets',
-                      info:
-                          'يكتب التقرير في ورقة جديدة «إضافات وخصومات» في نفس الجدول: القائمة الملصوقة في A–C، ونتيجة كل سطر بجانبه في E–G، والمجاميع تحتها، ثم جدول المقاصات (الإضافة، الخصم، الصافي). معالجة أخرى تُكتب في «إضافات وخصومات 2»… وإذا انقطع الاتصال تُعاد في نفس الورقة.',
-                      button: ErpButton(
-                        label: 'تصدير إلى ورقة «إضافات وخصومات»',
-                        icon: Icons.ios_share_outlined,
-                        kind: ErpButtonKind.indigoSoft,
-                        height: 42,
-                        fontSize: 13.5,
-                        loading: _pushing,
-                        loadingLabel: 'جاري التصدير…',
-                        onPressed: widget.jobId == null ? null : _push,
-                      ),
-                    ),
-              ],
+          )
+        else
+          const SizedBox(height: 12),
+        out.pushed
+            ? ErpButton(
+              label: 'فتح ورقة «${out.pushedSheet}»',
+              icon: Icons.open_in_new,
+              kind: ErpButtonKind.outline,
+              onPressed: _open,
+            )
+            : ErpButton(
+              label: 'تصدير إلى ورقة «إضافات وخصومات»',
+              icon: Icons.file_download_outlined,
+              kind: ErpButtonKind.indigoSoft,
+              loading: _pushing,
+              loadingLabel: 'جاري التصدير…',
+              onPressed: widget.jobId == null ? null : _push,
             ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: Tw.rule)),
           ),
-          Container(
-            color: Tw.slate50,
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-            child: const Row(
-              children: [
-                Expanded(child: _Head('رقم المستخدم')),
-                Expanded(child: _Head('الحالة')),
-                Expanded(child: _Head('المبلغ')),
-              ],
-            ),
+          child: const Row(
+            children: [
+              Expanded(flex: 4, child: _Head('رقم المستخدم')),
+              Expanded(flex: 5, child: _Head('الحالة')),
+              Expanded(flex: 3, child: _Head('المبلغ', end: true)),
+            ],
           ),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: const EdgeInsets.only(bottom: 16),
-              itemCount: out.results.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (_, i) => _ResultRow(out.results[i]),
-            ),
-          ),
-        ],
+        ),
+      ],
+    );
+    return AppSheet(
+      title: 'تقرير تطبيق التسويات',
+      scroll: false,
+      actions: [
+        IconButton(
+          tooltip: 'نسخ الجدول والملخص',
+          onPressed: () async {
+            await Clipboard.setData(
+              ClipboardData(text: AdjustmentsService.copyText(out.results, s)),
+            );
+            if (context.mounted) {
+              showToast(
+                context,
+                'نُسخ الجدول والملخص — الصقه في Excel.',
+                ToastType.success,
+              );
+            }
+          },
+          icon: Icon(Icons.content_copy_outlined, color: Tw.ink2),
+        ),
+      ],
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.74,
+        child: ListView.builder(
+          itemCount: out.results.length + 1,
+          itemBuilder: (_, i) => i == 0 ? head : _ResultRow(out.results[i - 1]),
+        ),
       ),
     );
   }
 }
 
 class _Head extends StatelessWidget {
-  const _Head(this.text);
+  const _Head(this.text, {this.end = false});
   final String text;
+  final bool end;
   @override
   Widget build(BuildContext context) => Text(
     text,
-    textAlign: TextAlign.center,
-    style: const TextStyle(
-      fontSize: 11,
+    textAlign: end ? TextAlign.end : TextAlign.start,
+    style: TextStyle(
+      fontSize: 12.5,
       fontWeight: FontWeight.w700,
-      color: Tw.slate500,
+      color: Tw.ink2,
     ),
   );
 }
 
+/// `.rtable` row: id, the status pill (and the netting), the amount.
 class _ResultRow extends StatelessWidget {
   const _ResultRow(this.r);
   final AdjustResult r;
@@ -909,64 +906,51 @@ class _ResultRow extends StatelessWidget {
                 st.contains('خطأ')
             ? Tone.danger
             : Tone.success;
-    final (bg, fg) = toneColors(tone);
-    final border = bg;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Tw.rule)),
+      ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
+            flex: 4,
             child: Text(
               r.id,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 13, color: Tw.slate800),
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 14.5,
+                fontWeight: FontWeight.w700,
+                color: Tw.ink,
+              ),
             ),
           ),
           Expanded(
+            flex: 5,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: bg,
-                    borderRadius: BorderRadius.circular(99),
-                    border: Border.all(color: border),
-                  ),
-                  child: Text(
-                    st,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: fg,
-                    ),
-                  ),
-                ),
+                StatusBadge(st, tone: tone, small: true),
                 if (r.settlement != null)
                   Padding(
-                    padding: const EdgeInsets.only(top: 3),
+                    padding: const EdgeInsets.only(top: 5),
                     child: Text(
                       'مقاصة: ${r.settlement}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 10, color: Tw.slate500),
+                      style: TextStyle(fontSize: 12, color: Tw.ink2),
                     ),
                   ),
               ],
             ),
           ),
           Expanded(
+            flex: 3,
             child: Text(
               AdjustmentsService.money(r.amount),
-              textAlign: TextAlign.center,
+              textAlign: TextAlign.left,
               textDirection: TextDirection.ltr,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: Tw.slate800,
-              ),
+              style: TextStyle(fontSize: 14.5, color: Tw.ink),
             ),
           ),
         ],

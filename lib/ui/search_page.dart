@@ -16,6 +16,8 @@ import '../erp/payroll_audit_engine.dart';
 import '../services/search_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'help.dart';
+import 'shell.dart';
 import 'ui_kit.dart';
 
 /// ERP «البحث والتدقيق» page (`views/partials/search.ejs`).
@@ -248,126 +250,228 @@ class _SearchPageState extends State<SearchPage> {
 
   // ------------------------------------------------------------------ UI
   //
-  // «Compact Fluid UI» (3.0): search-first — one field with paste, the
-  // scope (this period / all periods) as a segmented control, then the
-  // member card. Same queries, selective audit, copy and image export.
+  // Owner's mockup (`screenSearch`): the search box first, the scope and
+  // the % on one line, the period, then the member card. The selective
+  // audit opens from the card in a sheet.
+
+  /// The colours of the classification key (the saved audit colours).
+  Color _keyAgent = hexColor(defaultAgentColor);
+  Color _keyMgmt = hexColor(defaultManagementColor);
+  bool _keysLoaded = false;
+
+  Future<void> _loadKeys() async {
+    _keysLoaded = true;
+    final s = await _s.db.getPayrollSettings();
+    if (!mounted) return;
+    setState(() {
+      _keyAgent = hexColor(s.agentColor);
+      _keyMgmt = hexColor(s.managementColor);
+    });
+  }
 
   @override
-  Widget build(BuildContext context) => ListView(
-    padding: Ds.pagePadding,
-    children: [
-      _criteria(),
-      if (_outcome != null) ...[const SizedBox(height: 14), _resultCard()],
-      if (_outcome == null)
-        const Padding(
-          padding: EdgeInsets.only(top: 40),
+  Widget build(BuildContext context) {
+    if (!_keysLoaded) _loadKeys();
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 32),
+      children: [
+        ScreenHeader(title: 'الاستعلام', help: () => inquiryHelp),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.manage_search, size: 40, color: Tw.slate300),
-              SizedBox(height: 8),
-              Text(
-                'أدخل رقم المستخدم للاستعلام عن حالته وراتبه',
-                style: TextStyle(fontSize: 13, color: Tw.slate400),
+              const SizedBox(height: 18),
+              _searchBox(),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: SegmentedChoice(
+                      options: const ['هذه الفترة', 'كل الفترات'],
+                      selected: _global ? 1 : 0,
+                      onChanged: (i) {
+                        setState(() => _global = i == 1);
+                        _debounced();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _percentBox(),
+                ],
               ),
+              if (!_global) ...[
+                const SizedBox(height: 8),
+                ErpSelect<String>(
+                  thick: true,
+                  options:
+                      _cycles.isEmpty
+                          ? const [SelectOption('', '— لا توجد فترات —')]
+                          : [
+                            const SelectOption('', '— اختر الفترة —'),
+                            for (final c in _cycles)
+                              SelectOption(
+                                '${c.id}',
+                                c.name.isEmpty ? 'فترة #${c.id}' : c.name,
+                              ),
+                          ],
+                  value: _cycleId,
+                  onChanged: (v) {
+                    setState(() => _cycleId = v);
+                    _debounced();
+                  },
+                ),
+              ],
+              if (_outcome != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: _resultCard(),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 52, 20, 0),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: Tw.surface,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(Icons.search, size: 30, color: Tw.ink3),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'أدخل رقم المستخدم للاستعلام عن حالته وراتبه.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 15, color: Tw.ink2),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
-    ],
-  );
-
-  Widget _criteria() => Container(
-    decoration: panelDecoration(),
-    padding: const EdgeInsets.all(12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _userId,
-          keyboardType: TextInputType.number,
-          onChanged: (_) => _debounced(),
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          decoration: InputDecoration(
-            hintText: 'رقم المستخدم',
-            fillColor: Tw.slate50,
-            prefixIcon: const Icon(Icons.search, size: 20, color: Tw.slate400),
-            suffixIcon: IconButton(
-              tooltip: 'لصق',
-              onPressed: _paste,
-              icon: const Icon(
-                Icons.content_paste_outlined,
-                size: 19,
-                color: Tw.slate500,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _Segmented(
-                options: const ['هذه الفترة', 'كل الفترات'],
-                selected: _global ? 1 : 0,
-                onChanged: (i) {
-                  setState(() => _global = i == 1);
-                  _debounced();
-                },
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 84,
-              child: TextField(
-                controller: _discount,
-                textDirection: TextDirection.ltr,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                onChanged: (_) => _debounced(),
-                style: const TextStyle(fontSize: 14),
-                decoration: const InputDecoration(
-                  hintText: '0',
-                  prefixIcon: Icon(Icons.percent, size: 16, color: Tw.slate400),
-                  prefixIconConstraints: BoxConstraints(minWidth: 30),
-                ),
-              ),
-            ),
-            const InfoTip(
-              'يُستعلم برقم المستخدم في فترة الرواتب المختارة، أو في كل الفترات. يقرأ الاستعلام آخر مزامنة للفترة (من التدقيق أو المزامنة التلقائية). النسبة % خصم يُطبَّق على الراتب المعروض. من النتيجة يمكن التدقيق الانتقائي لمستخدم واحد، ونسخ البطاقة أو حفظها كصورة.',
-              title: 'الاستعلام',
-            ),
-          ],
-        ),
-        if (!_global) ...[
-          const SizedBox(height: 8),
-          ErpSelect<String>(
-            muted: true,
-            options:
-                _cycles.isEmpty
-                    ? const [SelectOption('', '— لا توجد فترات —')]
-                    : [
-                      const SelectOption('', '— اختر الفترة —'),
-                      for (final c in _cycles)
-                        SelectOption(
-                          '${c.id}',
-                          c.name.isEmpty ? 'فترة #${c.id}' : c.name,
-                        ),
-                    ],
-            value: _cycleId,
-            onChanged: (v) {
-              setState(() => _cycleId = v);
-              _debounced();
-            },
-          ),
-        ],
       ],
-    ),
-  );
+    );
+  }
+
+  /// `.searchbox`.
+  Widget _searchBox() {
+    final r = BorderRadius.circular(20);
+    return SizedBox(
+      height: 60,
+      child: TextField(
+        controller: _userId,
+        keyboardType: TextInputType.number,
+        onChanged: (_) => _debounced(),
+        style: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: Tw.ink,
+        ),
+        decoration: InputDecoration(
+          hintText: 'رقم المستخدم',
+          hintStyle: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w500,
+            color: Tw.ink3,
+          ),
+          filled: true,
+          fillColor: Tw.surface,
+          contentPadding: const EdgeInsets.symmetric(vertical: 18),
+          prefixIcon: Icon(Icons.search, size: 22, color: Tw.ink3),
+          suffixIcon: IconButton(
+            tooltip: 'لصق',
+            onPressed: _paste,
+            icon: Icon(Icons.content_paste_outlined, size: 20, color: Tw.ink2),
+          ),
+          border: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.accent, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// `.mini-input`: the discount applied to the shown salary.
+  Widget _percentBox() {
+    final r = BorderRadius.circular(13);
+    return SizedBox(
+      width: 96,
+      height: 46,
+      child: TextField(
+        controller: _discount,
+        textDirection: TextDirection.ltr,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        onChanged: (_) => _debounced(),
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: Tw.ink,
+        ),
+        decoration: InputDecoration(
+          hintText: '0',
+          filled: true,
+          fillColor: Tw.surface,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          prefixIcon: Icon(Icons.percent, size: 16, color: Tw.ink3),
+          prefixIconConstraints: const BoxConstraints(minWidth: 34),
+          border: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: r,
+            borderSide: BorderSide(color: Tw.accent, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _resultCard() {
     final o = _outcome!;
+    if (!o.success) {
+      // `.s-msg`.
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Tw.warnSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 20, color: Tw.warn),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                o.message!,
+                style: TextStyle(fontSize: 14.5, height: 1.65, color: Tw.warn),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    // `.rcard`.
     return Container(
-      decoration: panelDecoration(),
+      decoration: panelDecoration(radius: Ds.radiusL),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -375,101 +479,116 @@ class _SearchPageState extends State<SearchPage> {
           RepaintBoundary(
             key: _cardKey,
             child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              color: Tw.surface,
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
               child: _resultBody(o),
             ),
           ),
-          if (o.success)
-            Container(
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Tw.slate200)),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextButton.icon(
-                      onPressed: _copyCard,
-                      icon: const Icon(Icons.content_copy_outlined, size: 17),
-                      label: const Text('نسخ كبطاقة'),
-                    ),
-                  ),
-                  Container(width: 1, height: 24, color: Tw.slate200),
-                  Expanded(
-                    child: TextButton.icon(
-                      onPressed: _downloadImage,
-                      icon: const Icon(Icons.image_outlined, size: 17),
-                      label: const Text('حفظ كصورة'),
-                    ),
-                  ),
-                ],
-              ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton.icon(
+                  onPressed: _copyCard,
+                  icon: const Icon(Icons.content_copy_outlined, size: 17),
+                  label: const Text('نسخ كبطاقة'),
+                ),
+                const SizedBox(width: 2),
+                TextButton.icon(
+                  onPressed: _downloadImage,
+                  icon: const Icon(Icons.image_outlined, size: 17),
+                  label: const Text('حفظ كصورة'),
+                ),
+              ],
             ),
-          if (_auditOpen)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: _auditOptions(),
-            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _kv(String label, Widget value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
+  Widget _kv(String label, Widget value) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: 42),
     child: Row(
-      children: [Expanded(child: Text(label, style: Ds.secondary)), value],
+      children: [
+        Expanded(
+          child: Text(label, style: TextStyle(fontSize: 15, color: Tw.ink2)),
+        ),
+        value,
+      ],
     ),
   );
 
   Widget _num(double v) => Text(
     jsNumberToString(v),
     textDirection: TextDirection.ltr,
-    style: const TextStyle(
-      fontSize: 14,
-      fontWeight: FontWeight.w700,
-      color: Tw.slate900,
-    ),
+    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Tw.ink),
   );
 
   Widget _auditBadge(CycleSearchHit h) => StatusBadge(
-    h.auditStatus,
+    h.auditStatus == 'مدقق' ? 'مدقق' : h.auditStatus,
     tone: h.auditStatus == 'مدقق' ? Tone.success : Tone.warning,
     icon: h.auditStatus == 'مدقق' ? Icons.check : Icons.schedule,
   );
 
-  Widget _hitDetails(CycleSearchHit h) => Column(
-    children: [
-      _kv('التصنيف', StatusBadge(h.logicalStatus, tone: Tone.accent)),
-      _kv('الراتب قبل الخصم', _num(h.salaryBefore)),
-      _kv('الراتب بعد الخصم', _num(h.salaryAfter)),
-      _kv('حالة التدقيق', _auditBadge(h)),
-      if (h.auditSource != null)
-        Align(
-          alignment: AlignmentDirectional.centerEnd,
-          child: Text(h.auditSource!, style: Ds.secondary),
+  /// `.cls`: the classification with the key of its colour.
+  Widget _classification(CycleSearchHit h) {
+    final t = h.logicalStatus;
+    final Color? key =
+        t.startsWith(statusAgent)
+            ? _keyAgent
+            : t.startsWith(statusManagement)
+            ? _keyMgmt
+            : null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ColorKey(key),
+        const SizedBox(width: 7),
+        Text(
+          t,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Tw.ink,
+          ),
         ),
-    ],
-  );
+      ],
+    );
+  }
 
-  Widget _resultBody(SearchOutcome o) {
-    if (!o.success) {
-      return Row(
+  Widget _hitDetails(CycleSearchHit h, {required VoidCallback? onAudit}) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.info_outline, size: 20, color: Tw.amber700),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              o.message!,
-              style: const TextStyle(
-                color: Tw.amber800,
-                fontWeight: FontWeight.w600,
+          _kv('التصنيف', _classification(h)),
+          _kv('الراتب قبل الخصم', _num(h.salaryBefore)),
+          _kv('الراتب بعد الخصم', _num(h.salaryAfter)),
+          _kv('حالة التدقيق', _auditBadge(h)),
+          if (h.auditSource != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                h.auditSource!,
+                textAlign: TextAlign.end,
+                style: TextStyle(fontSize: 12.5, color: Tw.ink3),
               ),
             ),
-          ),
+          if (h.canAudit && onAudit != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 8),
+              child: ErpButton(
+                label: 'تدقيق انتقائي',
+                kind: ErpButtonKind.indigoSoft,
+                height: 40,
+                onPressed: onAudit,
+              ),
+            ),
         ],
       );
-    }
+
+  Widget _resultBody(SearchOutcome o) {
     final first = o.hits.first;
     final name = o.hits
         .map((h) => h.name)
@@ -477,79 +596,88 @@ class _SearchPageState extends State<SearchPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            const IconChip(
-              Icons.person_outline,
-              size: 40,
-              color: Tw.indigo600,
-              bg: Tw.indigo50,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    first.memberId,
-                    textDirection: TextDirection.ltr,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Tw.slate900,
-                    ),
-                  ),
-                  if (name != null)
-                    Text(name, style: Ds.secondary, maxLines: 1),
-                ],
+        Container(
+          padding: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: Tw.rule)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: Tw.accentSoft,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.person_outline,
+                  size: 22,
+                  color: Tw.accentInk,
+                ),
               ),
-            ),
-            if (_global0)
-              StatusBadge('${o.hits.length} فترة', icon: Icons.layers_outlined),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      first.memberId,
+                      textDirection: TextDirection.ltr,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        height: 1.3,
+                        color: Tw.ink,
+                      ),
+                    ),
+                    if (name != null)
+                      Text(
+                        name,
+                        maxLines: 1,
+                        style: TextStyle(fontSize: 14, color: Tw.ink2),
+                      ),
+                  ],
+                ),
+              ),
+              if (_global0) StatusBadge('${o.hits.length} فترة'),
+            ],
+          ),
         ),
-        const SizedBox(height: 8),
-        const Divider(height: 1),
-        const SizedBox(height: 4),
         if (!_global0)
-          _hitDetails(first)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _hitDetails(
+              first,
+              onAudit:
+                  () => _openSelective(first.memberId, first.logicalStatus),
+            ),
+          )
         else
           for (final h in o.hits)
             Container(
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-              decoration: panelDecoration(color: Tw.slate50),
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Tw.rule)),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.calendar_month_outlined,
-                        size: 16,
-                        color: Tw.slate500,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          h.cycleName,
-                          style: const TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      if (h.canAudit)
-                        TextButton(
-                          onPressed: () {
-                            setState(() => _cycleId = '${h.cycleId}');
-                            _openAudit(h.memberId, h.logicalStatus);
-                          },
-                          child: const Text('تدقيق انتقائي'),
-                        ),
-                    ],
+                  Text(
+                    h.cycleName,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Tw.ink,
+                    ),
                   ),
-                  _hitDetails(h),
+                  _hitDetails(
+                    h,
+                    onAudit: () {
+                      setState(() => _cycleId = '${h.cycleId}');
+                      _openSelective(h.memberId, h.logicalStatus);
+                    },
+                  ),
                 ],
               ),
             ),
@@ -557,129 +685,149 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _auditOptions() {
-    final isAgent = _auditLogical.startsWith(statusAgent);
-    final isMgmt = _auditLogical.startsWith(statusManagement);
-    final showAgent = isAgent || !isMgmt;
-    final showMgmt = isMgmt || !isAgent;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: panelDecoration(color: Tw.slate50),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'خيارات التدقيق الانتقائي',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Tw.slate800,
-                  ),
+  /// `selSheet`: the selective audit of one member.
+  Future<void> _openSelective(String memberId, String logical) async {
+    if (!_auditOpen || _auditMemberId != memberId) {
+      _openAudit(memberId, logical);
+    }
+    final cycle = _cycles.where((c) => '${c.id}' == _cycleId).firstOrNull;
+    await showAppSheet<void>(
+      context,
+      (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          // Follow the page (target sheets loading, running state).
+          void both(VoidCallback f) {
+            setState(f);
+            setLocal(() {});
+          }
+
+          final isAgent = _auditLogical.startsWith(statusAgent);
+          final isMgmt = _auditLogical.startsWith(statusManagement);
+          final showAgent = isAgent || !isMgmt;
+          final showMgmt = isMgmt || !isAgent;
+          return AppSheet(
+            title: 'التدقيق الانتقائي',
+            footer: ErpButton(
+              label: 'تنفيذ التدقيق الانتقائي',
+              loading: _executing,
+              loadingLabel: 'جاري التنفيذ…',
+              onPressed: () async {
+                // `_execute` marks itself running before its first await.
+                final run = _execute();
+                setLocal(() {});
+                await run;
+                if (!mounted) return;
+                if (!_auditOpen && ctx.mounted) {
+                  Navigator.pop(ctx);
+                } else {
+                  setLocal(() {});
+                }
+              },
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'للمستخدم ${ltr(memberId)} في «${cycle == null ? '' : (cycle.name.isEmpty ? 'فترة #${cycle.id}' : cycle.name)}». اختر ورقة في جدول الإدارة، أو اكتب اسمًا لإنشاء ورقة جديدة. يُلحق صف الإدارة بها ويُلوَّن.',
+                  style: TextStyle(fontSize: 14.5, height: 1.7, color: Tw.ink2),
                 ),
-              ),
-              InfoTip(
-                'اختر ورقة في جدول الإدارة أو اكتب اسماً لإنشاء ورقة جديدة في الفترة الحالية. يُلحق صف المستخدم بالورقة ويُلوَّن، وتُلوَّن صفوفه الأصلية في الإدارة والوكيل، وتُسجَّل حالته «تدقيق من أداة البحث».',
-                title: 'التدقيق الانتقائي',
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          const FieldLabel(
-            'ورقة الهدف في جدول الإدارة',
-            small: true,
-            bold: true,
-          ),
-          ErpSelect<String>(
-            thick: true,
-            options: [
-              SelectOption('', _targetMessage ?? '— اختر ورقة أو أنشئ جديدة —'),
-              for (final s in _targetSheets) SelectOption(s, s),
-            ],
-            value: _targetSheet,
-            onChanged: (v) => setState(() => _targetSheet = v),
-          ),
-          const SizedBox(height: 6),
-          ErpTextField(controller: _newSheet, hint: 'اسم ورقة جديدة (اختياري)'),
-          const SizedBox(height: 12),
-          if (showAgent) ...[
-            const FieldLabel('لون سحب الوكيل', small: true, bold: true),
-            ColorField(
-              value: _agentColor,
-              onChanged: (v) => setState(() => _agentColor = v),
+                const SizedBox(height: 14),
+                FormRows(
+                  children: [
+                    FormRow(
+                      'ورقة الهدف في جدول الإدارة',
+                      _TargetSelect(
+                        page: this,
+                        onChanged: (v) => both(() => _targetSheet = v),
+                        tick: setLocal,
+                      ),
+                      block: true,
+                    ),
+                    FormRow(
+                      'اسم ورقة جديدة (اختياري)',
+                      ErpTextField(
+                        controller: _newSheet,
+                        thick: true,
+                        hint: 'مثال: وكالة جديدة',
+                      ),
+                      block: true,
+                    ),
+                    if (showAgent)
+                      FormRow(
+                        'لون سحب الوكيل',
+                        ColorSwatchButton(
+                          value: _agentColor,
+                          onChanged: (v) => both(() => _agentColor = v),
+                        ),
+                      ),
+                    if (showMgmt)
+                      FormRow(
+                        'لون سحب الإدارة',
+                        ColorSwatchButton(
+                          value: _mgmtColor,
+                          onChanged: (v) => both(() => _mgmtColor = v),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-          ],
-          if (showMgmt) ...[
-            const FieldLabel('لون سحب الإدارة', small: true, bold: true),
-            ColorField(
-              value: _mgmtColor,
-              onChanged: (v) => setState(() => _mgmtColor = v),
-            ),
-            const SizedBox(height: 12),
-          ],
-          ErpButton(
-            label: 'تنفيذ التدقيق الانتقائي',
-            icon: Icons.check_circle_outline,
-            loading: _executing,
-            loadingLabel: 'جاري التنفيذ...',
-            fontSize: 13,
-            onPressed: _execute,
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 }
 
-/// A two-option segmented control (scope of the inquiry).
-class _Segmented extends StatelessWidget {
-  const _Segmented({
-    required this.options,
-    required this.selected,
+/// The target sheet of the selective audit; rebuilds when the sheets of
+/// the period arrive.
+class _TargetSelect extends StatefulWidget {
+  const _TargetSelect({
+    required this.page,
     required this.onChanged,
+    required this.tick,
   });
-  final List<String> options;
-  final int selected;
-  final ValueChanged<int> onChanged;
+  final _SearchPageState page;
+  final ValueChanged<String> onChanged;
+  final StateSetter tick;
+  @override
+  State<_TargetSelect> createState() => _TargetSelectState();
+}
+
+class _TargetSelectState extends State<_TargetSelect> {
+  Timer? _t;
 
   @override
-  Widget build(BuildContext context) => Container(
-    height: 44,
-    padding: const EdgeInsets.all(3),
-    decoration: BoxDecoration(
-      color: Tw.slate100,
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(
-      children: [
-        for (var i = 0; i < options.length; i++)
-          Expanded(
-            child: GestureDetector(
-              onTap: () => onChanged(i),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                decoration: BoxDecoration(
-                  color: i == selected ? Colors.white : Colors.transparent,
-                  borderRadius: BorderRadius.circular(9),
-                  border: i == selected ? Border.all(color: Tw.slate200) : null,
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  options[i],
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight:
-                        i == selected ? FontWeight.w700 : FontWeight.w500,
-                    color: i == selected ? Tw.indigo700 : Tw.slate500,
-                  ),
-                ),
-              ),
-            ),
-          ),
+  void initState() {
+    super.initState();
+    // The list loads in the background: refresh until it is there.
+    _t = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      if (!mounted) return;
+      setState(() {});
+      if (widget.page._targetMessage == null ||
+          !widget.page._targetMessage!.contains('جاري')) {
+        _t?.cancel();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.page;
+    return ErpSelect<String>(
+      muted: true,
+      options: [
+        SelectOption('', p._targetMessage ?? '— اختر ورقة أو أنشئ جديدة —'),
+        for (final s in p._targetSheets) SelectOption(s, s),
       ],
-    ),
-  );
+      value: p._targetSheet,
+      onChanged: widget.onChanged,
+    );
+  }
 }

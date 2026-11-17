@@ -1,0 +1,211 @@
+// Flutter 3.50 deprecates its bundled Material exports; keep the SDK widgets.
+// ignore_for_file: deprecated_member_use
+
+import 'package:flutter/material.dart';
+
+import 'erp_theme.dart';
+import 'ui_kit.dart';
+
+/// One point of a screen's help; [title] may be empty.
+class HelpItem {
+  const HelpItem(this.title, this.text);
+  final String title;
+  final String text;
+}
+
+/// The single «؟» of a screen (owner's redesign): every explanation of the
+/// screen is in one sheet instead of «!» marks next to the controls.
+class HelpButton extends StatelessWidget {
+  const HelpButton({super.key, required this.title, required this.items});
+  final String title;
+  final List<HelpItem> Function() items;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: 'شرح هذه الشاشة',
+    onPressed: () => showHelp(context, title, items()),
+    icon: Icon(Icons.help_outline, size: 24, color: Tw.ink2),
+  );
+}
+
+/// `.help`: the points of the screen as a list with small accent squares.
+Future<void> showHelp(
+  BuildContext context,
+  String title,
+  List<HelpItem> items,
+) => showAppSheet<void>(
+  context,
+  (ctx) => AppSheet(
+    title: title,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < items.length; i++)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              border: i == 0 ? null : Border(top: BorderSide(color: Tw.rule)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(
+                    top: 10,
+                    start: 4,
+                    end: 14,
+                  ),
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: Tw.accent,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        if (items[i].title.isNotEmpty)
+                          TextSpan(
+                            text: '${items[i].title}: ',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        TextSpan(text: items[i].text),
+                      ],
+                    ),
+                    style: TextStyle(fontSize: 15, height: 1.75, color: Tw.ink),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  ),
+);
+
+// ------------------------------------------------------- screen help
+// The texts of the mockup's «؟» sheets, plus the details that used to sit
+// behind the «!» marks so no explanation is lost.
+
+const periodsHelp = [
+  HelpItem(
+    '',
+    'كل فترة رواتب تجمع جدول الإدارة وجدول الوكيل، من Google Sheets أو من ملفات Excel / CSV.',
+  ),
+  HelpItem(
+    '',
+    'أحدث فترة في الأعلى ومعها زر التدقيق. اضغط أي فترة لفتح تدقيقها، و«⋯» للمزامنة أو التعديل أو الإقفال أو الحذف.',
+  ),
+  HelpItem(
+    '',
+    'الشريط الملوّن ملخص آخر تدقيق بنفس الألوان التي تُكتب في جداولك: لون الوكيل، ولون الإدارة، والمخطط لغير الموجود. والشريط الرمادي يعني أنها لم تُدقَّق بعد.',
+  ),
+  HelpItem(
+    '',
+    'مساحات العمل تفصل فترات كل شركة وإعداداتها. بدّل بينها من تحت العنوان (يظهر عند وجود أكثر من مساحة)، أو من الإعدادات.',
+  ),
+  HelpItem(
+    '',
+    'مزامنة الفترة تحدّث لقطات جدولي الإدارة والوكيل من Google. الحذف من هذا الهاتف فقط، ولا يُحذف شيء من Google. اسحب القائمة للأسفل للتحديث.',
+  ),
+];
+
+/// The create / edit sheet of a period.
+const newPeriodHelp = [
+  HelpItem(
+    '',
+    'Google Sheets: اختر جدول وورقة الإدارة وجدول وورقة الوكيل من حسابك، أو «لصق رابط جدول Google…»، ثم «جلب البيانات».',
+  ),
+  HelpItem(
+    '',
+    'الملفات: اختر ملفي Excel أو CSV للإدارة والوكيل ثم «تحميل الملفات». تُقرأ الورقة الأولى من كل ملف.',
+  ),
+  HelpItem(
+    '',
+    'بعد القراءة اكتب اسم الفترة واحفظ. نسبة خصم التحويل تُحفظ مع الفترة كما في النظام؛ خصم التدقيق نفسه يُحدَّد من «إعداد التدقيق».',
+  ),
+];
+
+const adjustmentsHelp = [
+  HelpItem(
+    '',
+    'الصق القائمة كما تُنسخ من Excel: رقم المستخدم، ثم النوع (إضافة أو خصم أو خصم كامل)، ثم المبلغ، مفصولة بـTab أو بمسافات. النوع «خصم» يخصم، وأي نوع آخر (اضافة، إضافة…) يضيف. للخصم الكامل: «12345  خصم كامل» بدون مبلغ.',
+  ),
+  HelpItem(
+    '',
+    'إذا جاء رقم واحد بإضافة وخصم تُجمع عملياته في مقاصة واحدة تُطبّق مرة واحدة، ويُكتب في عمود الحالة «تم خصم …» أو «تم اضافة …» مع تفاصيل المقاصة. «خصم كامل» لا يدخل في المقاصة.',
+  ),
+  HelpItem(
+    '',
+    'جدول الرواتب: الجدول والورقة التي فيها رواتب المستخدمين، وعادة تكون بيانات المستخدمين. ربط الحقول: عمود المعرّف، وعمود الراتب الذي يُعدَّل، وعمود الحالة؛ الافتراضي كما في النظام C و L و O.',
+  ),
+  HelpItem(
+    '',
+    'التطبيق يعمل في الخلفية ويُستأنف بعد انقطاع الإنترنت دون تكرار أي خصم أو إضافة. إذا تغيّر راتب في الورقة أثناء الانتظار يتوقف قبل الكتابة.',
+  ),
+  HelpItem(
+    '',
+    'من التقرير يمكنك نسخ الجدول والملخص، أو تصديره إلى ورقة «إضافات وخصومات» في نفس الجدول: القائمة الملصوقة في A–C، ونتيجة كل سطر بجانبه في E–G، والمجاميع تحتها، ثم جدول المقاصات. معالجة أخرى تُكتب في «إضافات وخصومات 2»… وإذا انقطع الاتصال تُعاد في نفس الورقة.',
+  ),
+];
+
+const inquiryHelp = [
+  HelpItem(
+    '',
+    'يُستعلم برقم المستخدم في فترة الرواتب المختارة، أو في كل الفترات.',
+  ),
+  HelpItem(
+    '',
+    'يقرأ الاستعلام آخر مزامنة للفترة، من التدقيق أو من المزامنة التلقائية. نسبة الخصم تُطبَّق على الراتب المعروض فقط.',
+  ),
+  HelpItem(
+    '',
+    'من النتيجة يمكن التدقيق الانتقائي لمستخدم واحد، ونسخ البطاقة أو حفظها كصورة.',
+  ),
+  HelpItem(
+    '',
+    'التدقيق الانتقائي: اختر ورقة في جدول الإدارة أو اكتب اسمًا لإنشاء ورقة جديدة. يُلحق صف المستخدم بالورقة ويُلوَّن، وتُلوَّن صفوفه الأصلية في الإدارة والوكيل، وتُسجَّل حالته «تدقيق من أداة البحث».',
+  ),
+];
+
+const settingsHelp = [
+  HelpItem(
+    '',
+    'يتصل الهاتف بحساب Google مباشرة دون خادم، لقراءة الجداول وكتابة نتائج التدقيق وتسويات الرواتب.',
+  ),
+  HelpItem(
+    '',
+    'المزامنة التلقائية تحدّث لقطات الفترات المرتبطة بـGoogle وحالة التدقيق كل دقيقتين أثناء فتح التطبيق.',
+  ),
+  HelpItem(
+    '',
+    'لكل مساحة عمل فتراتها وتدقيقها وإعداداتها وربط حقولها، منفصلة عن غيرها. حساب Google مشترك بينها.',
+  ),
+  HelpItem(
+    '',
+    'ربط حقول البيانات: الأعمدة الافتراضية للمساحة الحالية، وتُطبَّق على شاشة التدقيق عند الحفظ.',
+  ),
+  HelpItem(
+    '',
+    'المظهر: فاتح أو داكن، أو حسب الجهاز ليتبع إعداد الهاتف. الإعداد للتطبيق كله وكل مساحات العمل.',
+  ),
+];
+
+const mappingHelp = [
+  HelpItem(
+    '',
+    'الأعمدة الافتراضية لهذه المساحة. تُطبَّق على شاشة التدقيق عند الحفظ، ويمكن تغييرها في أي وقت. «الافتراضي» يعيد أعمدة النظام.',
+  ),
+  HelpItem(
+    '',
+    'غير المذكورين: عند «تدقيق غير المذكورين» يُكتب الرقم في عمود رقم المستخدم وفي «أعمدة إضافية للرقم»، والنص في عمود اسم الوكالة وفي «أعمدة إضافية للنص».',
+  ),
+  HelpItem(
+    '',
+    'لون سجلات الإدارة المنقولة: يلوّن به إجراء «٢. نقل سجلات الإدارة غير الملوّنة» الصفوف التي ينقلها، في جدول الإدارة وفي ورقة «غير مذكور» فقط. لا يظهر في شاشة التدقيق.',
+  ),
+];
