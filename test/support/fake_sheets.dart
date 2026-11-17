@@ -72,7 +72,19 @@ class FakeSheets implements SheetsApi {
     final to =
         end == null ? rows.length : (end < rows.length ? end : rows.length);
     if (from >= rows.length) return [];
-    final out = rows.sublist(from, to).map((r) => [...r]).toList();
+    // Like Google, only the requested columns (e.g. 'Data'!L2:L9).
+    final m = RegExp(r"!([A-Z]+)\d*(?::([A-Z]+)\d*)?$").firstMatch(range);
+    final c0 = columnLetterToIndex(m?.group(1)) ?? 0;
+    final c1 = m?.group(2) == null ? null : columnLetterToIndex(m!.group(2));
+    final out = [
+      for (final r in rows.sublist(from, to))
+        [for (var c = c0; c < r.length && (c1 == null || c <= c1); c++) r[c]],
+    ];
+    for (final r in out) {
+      while (r.isNotEmpty && r.last.isEmpty) {
+        r.removeLast();
+      }
+    }
     while (out.isNotEmpty && out.last.every((c) => c.isEmpty)) {
       out.removeLast();
     }
@@ -177,6 +189,19 @@ class FakeSheets implements SheetsApi {
       }
     }
     return replies;
+  }
+
+  @override
+  Future<void> valuesBatchUpdate(
+    String id,
+    List<(String range, List<List<Object?>> values)> data,
+  ) async {
+    _maybeFail('valuesBatchUpdate', data);
+    log.add('BATCH VALUES $id ${data.length} ranges');
+    for (final (range, values) in data) {
+      final (title, col, row, _) = _range(range);
+      _write(id, title, columnLetterToIndex(col)!, row, values);
+    }
   }
 
   @override

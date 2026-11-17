@@ -89,6 +89,12 @@ abstract class SheetsApi {
     String spreadsheetId,
     List<Map<String, dynamic>> requests,
   );
+
+  /// `values:batchUpdate` (USER_ENTERED): several ranges in one request.
+  Future<void> valuesBatchUpdate(
+    String spreadsheetId,
+    List<(String range, List<List<Object?>> values)> data,
+  );
   Future<String> createSpreadsheet(String title, List<String> sheetTitles);
 
   /// Background colour of each cell in [column] for rows 1..[rowCount]
@@ -317,6 +323,25 @@ class GoogleSheetsApi implements SheetsApi {
       for (final r in (json['replies'] as List? ?? const []))
         Map<String, dynamic>.from(r as Map),
     ];
+  }
+
+  @override
+  Future<void> valuesBatchUpdate(
+    String spreadsheetId,
+    List<(String range, List<List<Object?>> values)> data,
+  ) async {
+    if (data.isEmpty) return;
+    await _send(
+      'POST',
+      _sheets('/${Uri.encodeComponent(spreadsheetId)}/values:batchUpdate'),
+      body: {
+        'valueInputOption': 'USER_ENTERED',
+        'data': [
+          for (final (range, values) in data)
+            {'range': range, 'majorDimension': 'ROWS', 'values': values},
+        ],
+      },
+    );
   }
 
   @override

@@ -10,6 +10,7 @@ import 'data/app_database.dart';
 import 'data/workspaces.dart';
 import 'google/google_auth.dart';
 import 'google/sheets_client.dart';
+import 'services/adjustments_service.dart';
 import 'services/audit_job_runner.dart';
 import 'services/cycle_service.dart';
 import 'services/cycle_sync_worker.dart';
@@ -137,6 +138,7 @@ class AppServices extends ChangeNotifier {
     payroll = PayrollService(db, () => sheets);
     search = SearchService(db, () => sheets);
     syncWorker = CycleSyncWorker(db, () => sheets);
+    adjustments = AdjustmentsService(db, () => sheets);
     auth.changes.listen((_) => notifyListeners());
   }
 
@@ -160,10 +162,23 @@ class AppServices extends ChangeNotifier {
   late final PayrollService payroll;
   late final SearchService search;
   late final CycleSyncWorker syncWorker;
+  late final AdjustmentsService adjustments;
 
   /// ERP starts the cycle sync worker with the server; the app runs it
   /// while it is open (see AppShell) when enabled in Settings.
-  late final AuditJobRunner jobRunner = AuditJobRunner(db, payroll, cycles);
+  late final AuditJobRunner jobRunner = AuditJobRunner(
+    db,
+    payroll,
+    cycles,
+    adjustments: adjustments,
+  );
+
+  /// «إضافات وخصومات»: a background job like the audit (no cycle).
+  Future<int> startAdjustments(AdjustRequest request) async {
+    final id = await db.createAuditJob(null, request.toJson());
+    await resumeAuditJobs();
+    return id;
+  }
 
   /// Saves a Google audit as a job: it starts right away in the app and the
   /// Android worker carries it on if the app is closed.

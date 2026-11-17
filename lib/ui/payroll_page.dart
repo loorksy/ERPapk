@@ -608,7 +608,10 @@ class _PayrollPageState extends State<PayrollPage> {
 
   /// One background job at a time (the audit and the «غير مذكور» tools).
   Future<bool> _noActiveJob() async {
-    final active = await _s.db.pendingAuditJobs();
+    final active = [
+      for (final j in await _s.db.pendingAuditJobs())
+        if (j.cycleId != null) j,
+    ];
     if (!mounted) return false;
     if (active.isEmpty) return true;
     showToast(

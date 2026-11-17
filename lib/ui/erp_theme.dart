@@ -54,6 +54,16 @@ abstract final class Tw {
   static const pink500 = Color(0xffec4899);
   static const purple500 = Color(0xffa855f7);
   static const yellow400 = Color(0xfffacc15);
+  // Sky (ERP «إضافات وخصومات» results).
+  static const sky50 = Color(0xfff0f9ff);
+  static const sky200 = Color(0xffbae6fd);
+  static const sky300 = Color(0xff7dd3fc);
+  static const sky600 = Color(0xff0284c7);
+  static const sky700 = Color(0xff0369a1);
+  static const sky800 = Color(0xff075985);
+  static const emerald100 = Color(0xffd1fae5);
+  static const red200 = Color(0xfffecaca);
+  static const amber300 = Color(0xfffcd34d);
   static const blue500 = Color(0xff3b82f6);
 }
 

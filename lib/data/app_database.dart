@@ -190,7 +190,9 @@ class AuditJob {
   static const failed = 'failed';
 
   final int id;
-  final int cycleId;
+
+  /// Null for jobs that belong to no cycle (additions and deductions).
+  final int? cycleId;
   final String status;
   final Map<String, Object?> request;
 
@@ -220,7 +222,7 @@ class AuditJob {
 
   static AuditJob fromRow(Map<String, Object?> r) => AuditJob(
     id: r['id'] as int,
-    cycleId: r['cycle_id'] as int,
+    cycleId: r['cycle_id'] as int?,
     status: r['status'] as String,
     request: _json(r['request_json']) ?? const {},
     stepNext: (r['step_next'] as num?)?.toInt() ?? 0,
@@ -253,7 +255,7 @@ class AuditRun {
 class AppDatabase {
   AppDatabase._(this._db);
   final Database _db;
-  static const schemaVersion = 4;
+  static const schemaVersion = 5;
 
   static Future<AppDatabase> open({
     String? path,
@@ -284,6 +286,7 @@ class AppDatabase {
             await _createBlobs(db);
             await _moveDataToBlobs(db);
           }
+          if (oldVersion >= 3 && oldVersion < 5) await _jobsWithoutCycle(db);
         },
       ),
     );
@@ -361,7 +364,7 @@ class AppDatabase {
   static Future<void> _createJobs(DatabaseExecutor db) =>
       db.execute('''CREATE TABLE audit_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      cycle_id INTEGER NOT NULL REFERENCES financial_cycles(id) ON DELETE CASCADE,
+      cycle_id INTEGER REFERENCES financial_cycles(id) ON DELETE CASCADE,
       status TEXT NOT NULL,
       request_json TEXT NOT NULL,
       plan_json TEXT,
@@ -382,6 +385,16 @@ class AppDatabase {
   // Android cannot read a single SQLite value larger than ~2 MB (cursor
   // window), so sheet snapshots, plans and results are stored as chunks.
   // This keeps the number of rows unlimited (owner's request).
+
+  /// Schema 5: jobs that belong to no cycle (additions and deductions).
+  /// SQLite cannot drop NOT NULL in place, so the table is rebuilt with
+  /// the same columns in the same order and every row is copied.
+  static Future<void> _jobsWithoutCycle(DatabaseExecutor db) async {
+    await db.execute('ALTER TABLE audit_jobs RENAME TO audit_jobs_v4');
+    await _createJobs(db);
+    await db.execute('INSERT INTO audit_jobs SELECT * FROM audit_jobs_v4');
+    await db.execute('DROP TABLE audit_jobs_v4');
+  }
 
   static Future<void> _createBlobs(DatabaseExecutor db) =>
       db.execute('''CREATE TABLE blobs (
@@ -537,7 +550,7 @@ class AppDatabase {
 
   // ---------------------------------------------------------- audit jobs
 
-  Future<int> createAuditJob(int cycleId, Map<String, Object?> request) {
+  Future<int> createAuditJob(int? cycleId, Map<String, Object?> request) {
     final now = _now();
     return _db.insert('audit_jobs', {
       'cycle_id': cycleId,
@@ -585,6 +598,18 @@ class AppDatabase {
       orderBy: 'id',
     );
     return rows.map(AuditJob.fromRow).toList();
+  }
+
+  /// The latest job that belongs to no cycle (additions and deductions).
+  Future<AuditJob?> latestCyclelessJob() async {
+    final rows = await _db.query(
+      'audit_jobs',
+      columns: _jobSummaryColumns,
+      where: 'cycle_id IS NULL',
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AuditJob.fromRow(rows.first);
   }
 
   Future<AuditJob?> latestAuditJob(int cycleId) async {

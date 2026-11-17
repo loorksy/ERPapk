@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../app_services.dart';
+import 'adjustments_page.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'payroll_page.dart';
@@ -15,6 +16,15 @@ import 'workspaces_card.dart';
 
 /// Mobile layout of the ERP dashboard: white top header with the page title
 /// in indigo and the white bottom navigation bar.
+/// Bottom navigation tabs.
+abstract final class AppTabs {
+  static const sheet = 0;
+  static const payroll = 1;
+  static const adjustments = 2;
+  static const search = 3;
+  static const settings = 4;
+}
+
 class AppShell extends StatefulWidget {
   const AppShell({super.key, this.initialTab = 1});
   final int initialTab;
@@ -63,6 +73,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   static const _items = [
     _NavItem(FontAwesomeIcons.fileExcel, 'Sheet', 'Sheet'),
     _NavItem(FontAwesomeIcons.moneyCheckDollar, 'تدقيق راتب', 'تدقيق الرواتب'),
+    _NavItem(
+      FontAwesomeIcons.scaleBalanced,
+      'إضافات وخصومات',
+      'إضافات وخصومات',
+    ),
     _NavItem(FontAwesomeIcons.magnifyingGlass, 'البحث', 'البحث'),
     _NavItem(FontAwesomeIcons.gear, 'الإعدادات', 'الإعدادات'),
   ];
@@ -214,7 +229,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   Future<void> _onWorkspaceMenu(BuildContext context, int value) async {
     final host = AppScope.read(context).host;
     if (value == _manageWorkspaces) {
-      goTo(3);
+      goTo(AppTabs.settings);
       return;
     }
     if (value == _addWorkspace) {
@@ -283,11 +298,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         children: [
           const SheetPage(),
           PayrollPage(
-            active: _index == 1,
-            onOpenSheet: () => goTo(0),
-            onOpenSettings: () => goTo(3),
+            active: _index == AppTabs.payroll,
+            onOpenSheet: () => goTo(AppTabs.sheet),
+            onOpenSettings: () => goTo(AppTabs.settings),
           ),
-          SearchPage(active: _index == 2),
+          AdjustmentsPage(active: _index == AppTabs.adjustments),
+          SearchPage(active: _index == AppTabs.search),
           const SettingsPage(),
         ],
       ),
@@ -322,12 +338,17 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                             color: i == _index ? Tw.indigo600 : Tw.slate400,
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            _items[i].label,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: i == _index ? Tw.indigo600 : Tw.slate400,
+                          // Five tabs: long labels shrink to fit.
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              _items[i].label,
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: i == _index ? Tw.indigo600 : Tw.slate400,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 10),

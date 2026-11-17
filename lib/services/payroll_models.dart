@@ -361,12 +361,16 @@ abstract final class JobKind {
   /// «غير مذكور» sheet.
   static const unmentionedMgmt = 'unmentionedMgmt';
 
+  /// «إضافات وخصومات» (ERP member adjustments, bulk): not tied to a cycle.
+  static const adjustments = 'adjustments';
+
   static String of(Map<String, Object?> request) =>
       (request['kind'] as String?) ?? audit;
 
   static String title(String kind) => switch (kind) {
     unmentionedUsers => 'تدقيق غير المذكورين',
     unmentionedMgmt => 'سحب صفوف الإدارة غير الملوّنة',
+    adjustments => 'معالجة الإضافات والخصومات',
     _ => 'التدقيق',
   };
 }

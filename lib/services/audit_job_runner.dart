@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../data/app_database.dart';
 import '../google/google_auth.dart';
 import '../google/sheets_client.dart';
+import 'adjustments_service.dart';
 import 'cycle_service.dart';
 import 'payroll_service.dart';
 
@@ -25,6 +26,7 @@ class AuditJobRunner {
     this.db,
     this.payroll,
     this.cycles, {
+    AdjustmentsService? adjustments,
     this.owner = 'app',
     this.retryDelays = const [
       Duration(seconds: 5),
@@ -32,9 +34,13 @@ class AuditJobRunner {
       Duration(seconds: 30),
       Duration(seconds: 60),
     ],
-  });
+  }) : adjustments =
+           adjustments ?? AdjustmentsService(db, payroll.sheetsProvider);
 
   final AppDatabase db;
+
+  /// «إضافات وخصومات» jobs (no cycle).
+  final AdjustmentsService adjustments;
   final PayrollService payroll;
   final CycleService cycles;
 
@@ -75,6 +81,9 @@ class AuditJobRunner {
   /// Returns true when the job ended (done or failed), false when it has to
   /// wait and be retried later.
   Future<bool> runJob(AuditJob job) async {
+    if (JobKind.of(job.request) == JobKind.adjustments) {
+      return _runAdjustments(job);
+    }
     final request = PayrollRequest.fromJson(job.request);
     final kind = JobKind.of(job.request);
     final options = UnmentionedOptions.fromJson(job.request['unmentioned']);
@@ -174,6 +183,96 @@ class AuditJobRunner {
           'error': _message(e),
           'progress':
               'انقطع الاتصال — إعادة المحاولة خلال ${delay.inSeconds} ثانية (${plan == null ? 'المزامنة' : 'الخطوة ${plan.next + 1} من ${plan.steps.length}'})',
+        });
+        await db.claimAuditJob(job.id, owner, delay + lease);
+        await Future<void>.delayed(delay);
+        await db.updateAuditJob(job.id, {'status': AuditJob.running});
+      }
+    }
+  }
+
+  /// «إضافات وخصومات»: read and compute once, then write in batches; a
+  /// lost connection waits and resumes at the same batch.
+  Future<bool> _runAdjustments(AuditJob job) async {
+    final request = AdjustRequest.fromJson(job.request);
+    AdjustPlan? plan;
+    final saved = await db.getAuditJobPlan(job.id);
+    if (saved != null) plan = AdjustPlan.fromJson(saved)..next = job.stepNext;
+    Future<void> progress(String m) async {
+      await db.updateAuditJob(job.id, {'progress': m});
+      await db.claimAuditJob(job.id, owner, lease);
+    }
+
+    await db.updateAuditJob(job.id, {
+      'status': AuditJob.running,
+      'attempts': job.attempts + 1,
+      'error': null,
+    });
+    var failures = 0;
+    for (;;) {
+      try {
+        if (plan == null) {
+          final p = await adjustments.prepare(request, progress);
+          if (p.failure != null) {
+            await db.updateAuditJob(job.id, {
+              'status': AuditJob.failed,
+              'error': p.failure,
+              'progress': p.failure,
+              'result_json': jsonEncode(p.result.toJson()),
+            });
+            return true;
+          }
+          plan = p;
+          await db.updateAuditJob(job.id, {
+            'plan_json': jsonEncode(p.toJson()),
+            'step_next': 0,
+            'step_total': p.steps.length,
+          });
+        }
+        final current = plan;
+        while (!current.complete) {
+          await adjustments.runStep(current, current.next, progress);
+          current.next++;
+          await db.updateAuditJob(job.id, {'step_next': current.next});
+          await db.claimAuditJob(job.id, owner, lease);
+        }
+        await db.updateAuditJob(job.id, {
+          'status': AuditJob.done,
+          'result_json': jsonEncode(current.result.toJson()),
+          'progress': current.result.message,
+          'error': null,
+        });
+        return true;
+      } on GoogleNotConnected catch (e) {
+        await _wait(job.id, e.toString());
+        return false;
+      } catch (e) {
+        final transient = e is SheetsApiException && e.transient;
+        if (!transient) {
+          final m = _message(e);
+          await db.updateAuditJob(job.id, {
+            'status': AuditJob.failed,
+            'error': m,
+            'progress': m,
+            'result_json': jsonEncode(
+              AdjustOutcome(success: false, message: m).toJson(),
+            ),
+          });
+          return true;
+        }
+        if (failures >= retryDelays.length) {
+          await _wait(
+            job.id,
+            'انقطع الاتصال بـ Google. ستُستأنف المعالجة تلقائيًا من حيث توقفت عند عودة الإنترنت.',
+          );
+          return false;
+        }
+        final delay = retryDelays[failures++];
+        await db.updateAuditJob(job.id, {
+          'status': AuditJob.waiting,
+          'error': _message(e),
+          'progress':
+              'انقطع الاتصال — إعادة المحاولة خلال ${delay.inSeconds} ثانية',
         });
         await db.claimAuditJob(job.id, owner, delay + lease);
         await Future<void>.delayed(delay);

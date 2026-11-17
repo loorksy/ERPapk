@@ -7,6 +7,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../app_services.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'shell.dart';
 
 /// Asks for a workspace name (new workspace or rename).
 Future<String?> askWorkspaceName(
@@ -90,7 +91,7 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
       if (!mounted) return;
       showToast(context, 'تم إنشاء «${w.name}»', ToastType.success);
       // Open it right away; the app reloads on the new workspace.
-      await host.switchTo(w.id, tab: 3);
+      await host.switchTo(w.id, tab: AppTabs.settings);
     });
   }
 
@@ -204,8 +205,12 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
                             onPressed:
                                 _busy
                                     ? null
-                                    : () =>
-                                        _run(() => host.switchTo(w.id, tab: 3)),
+                                    : () => _run(
+                                      () => host.switchTo(
+                                        w.id,
+                                        tab: AppTabs.settings,
+                                      ),
+                                    ),
                             child: const Text('فتح'),
                           ),
                         PopupMenuButton<String>(
