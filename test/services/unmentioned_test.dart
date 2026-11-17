@@ -261,6 +261,59 @@ void main() {
     ]);
   });
 
+  test('an empty agency name sends the user to «غير مذكور»', () async {
+    final id = await linkedCycle();
+    fake.books['ui']!['Data']!.add(['x2', '', '1002', '', 'SY']);
+    fake.books['ui']!['Data']!.add(['x5', '', '1005', '  ', 'SY']);
+    final job = await db.createAuditJob(id, {
+      ...PayrollRequest(
+        cycleId: id,
+        userInfo: const GoogleUserInfo('ui', 'Data'),
+        discountRate: 10,
+        agentColor: '#8b5cf6',
+        managementColor: '#facc15',
+        columns: const AuditColumns(),
+        emptyTitle: 'غير مذكور',
+      ).toJson(),
+    });
+    await runner.runPending();
+    final done = (await db.getAuditJob(job))!;
+    expect(done.status, AuditJob.done, reason: done.error);
+    // Same audit (salary and status), copied to «غير مذكور» instead of a
+    // sheet per row; column D itself is left empty.
+    expect(fake.books['cyc']!['غير مذكور']!.map((r) => r.first), [
+      '1002',
+      '1005',
+    ]);
+    expect(fake.books['cyc']!.keys.any((k) => k.startsWith('صف_')), isFalse);
+    final ui = fake.books['ui']!['Data']!;
+    expect(ui[3][3], '');
+    expect(ui[3][12], 'سحب وكيل راتبين');
+    expect(ui[4][12], 'سحب ادارة');
+  });
+
+  test('without the option the empty title stays ERP «صف_N»', () {
+    final out = runPayrollAuditCore(
+      managementRows: mgmtSheet,
+      agentRows: agentSheet,
+      userInfoRows: [
+        userInfoSheet[0],
+        ['x', '', '1003', '', ''],
+      ],
+    );
+    expect(out.results.single.title, 'صف_1');
+    final routed = runPayrollAuditCore(
+      managementRows: mgmtSheet,
+      agentRows: agentSheet,
+      userInfoRows: [
+        userInfoSheet[0],
+        ['x', '', '1003', '', ''],
+      ],
+      emptyTitle: 'غير مذكور',
+    );
+    expect(routed.results.single.title, 'غير مذكور');
+  });
+
   test('amounts with Arabic digits and separators', () {
     expect(PayrollService.parseAmount('٢٫٥'), 2.5);
     expect(PayrollService.parseAmount('0.00'), 0);

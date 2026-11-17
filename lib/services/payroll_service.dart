@@ -173,6 +173,7 @@ class PayrollService {
       discountRatePct: discountRatePct,
       agentColor: req.agentColor,
       managementColor: req.managementColor,
+      emptyTitle: req.emptyTitle,
     );
     final duplicates = findDuplicateGroups(out);
     if (duplicates.isNotEmpty) {
@@ -617,6 +618,7 @@ class PayrollService {
       discountRatePct: discountRatePct,
       agentColor: req.agentColor,
       managementColor: req.managementColor,
+      emptyTitle: req.emptyTitle,
     );
     final duplicates = findDuplicateGroups(out);
     final skipped = {for (final d in duplicates) ...d.skippedRows};
@@ -848,6 +850,7 @@ class PayrollService {
       discountRatePct: resolveDiscount(req.discountRate, settings),
       agentColor: req.agentColor,
       managementColor: req.managementColor,
+      emptyTitle: req.emptyTitle,
     );
     final grouped = groupByTitle(out, {
       for (final r in out.results)

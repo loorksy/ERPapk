@@ -208,6 +208,10 @@ class AuditCoreOutput {
 }
 
 /// ERP `runPayrollAuditCore`.
+///
+/// [emptyTitle] (owner's request, 2026-11-17): a user whose title column
+/// (agency name, D) is empty goes to the sheet of that name («غير مذكور»)
+/// instead of ERP's one-sheet-per-row «صف_N». Null keeps ERP's behaviour.
 AuditCoreOutput runPayrollAuditCore({
   required SheetRows managementRows,
   required SheetRows agentRows,
@@ -216,6 +220,7 @@ AuditCoreOutput runPayrollAuditCore({
   double discountRatePct = 0,
   String? agentColor,
   String? managementColor,
+  String? emptyTitle,
 }) {
   final colC = columnLetterToIndex(columns.userInfoUserIdCol) ?? 2;
   final colD = columnLetterToIndex(columns.userInfoTitleCol) ?? 3;
@@ -277,7 +282,11 @@ AuditCoreOutput runPayrollAuditCore({
     final uid = normalizeUserId(cellAt(row, colC));
     final rawTitle = cellAt(row, colD);
     final trimmedTitle = (rawTitle ?? '').trim();
-    final title = trimmedTitle.isNotEmpty ? trimmedTitle : 'صف_${i + 1}';
+    final fallback =
+        emptyTitle == null || emptyTitle.trim().isEmpty
+            ? 'صف_${i + 1}'
+            : emptyTitle.trim();
+    final title = trimmedTitle.isNotEmpty ? trimmedTitle : fallback;
     final agentMatches =
         uid.isNotEmpty
             ? (agentByUserId[uid] ?? const <AgentMatch>[])

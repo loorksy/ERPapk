@@ -678,6 +678,8 @@ class _PayrollPageState extends State<PayrollPage> {
         cycleAgentSalaryCol: _cycleAgentSalaryCol,
       ),
       userInfoStatusCol: _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
+      // Owner's request: an empty agency name goes to «غير مذكور».
+      emptyTitle: _ws.unmentionedLabel,
     );
     _saveDraft();
     return request;

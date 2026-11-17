@@ -33,6 +33,7 @@ class PayrollRequest {
     required this.columns,
     this.userInfoStatusCol,
     this.forceReaudit = false,
+    this.emptyTitle,
   });
 
   final int cycleId;
@@ -45,6 +46,10 @@ class PayrollRequest {
   final AuditColumns columns;
   final String? userInfoStatusCol;
   final bool forceReaudit;
+
+  /// Sheet for users with an empty agency name (owner's request: the
+  /// workspace's «غير مذكور»); null keeps ERP's «صف_N».
+  final String? emptyTitle;
 
   /// Background jobs only run Google audits.
   Map<String, Object?> toJson() {
@@ -67,6 +72,7 @@ class PayrollRequest {
       'cycleAgentSalaryCol': columns.cycleAgentSalaryCol,
       'userInfoStatusCol': userInfoStatusCol,
       'forceReaudit': forceReaudit,
+      'emptyTitle': emptyTitle,
     };
   }
 
@@ -89,6 +95,7 @@ class PayrollRequest {
     ),
     userInfoStatusCol: j['userInfoStatusCol'] as String?,
     forceReaudit: j['forceReaudit'] == true,
+    emptyTitle: j['emptyTitle'] as String?,
   );
 }
 
