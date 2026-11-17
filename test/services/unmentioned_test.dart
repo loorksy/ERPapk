@@ -292,6 +292,33 @@ void main() {
     expect(ui[4][12], 'سحب ادارة');
   });
 
+  test(
+    '«غير مذكور» typed by hand, forgotten or pasted with marks: one sheet',
+    () {
+      final out = runPayrollAuditCore(
+        managementRows: mgmtSheet,
+        agentRows: agentSheet,
+        userInfoRows: [
+          userInfoSheet[0],
+          ['a', '', '1001', 'غير مذكور', ''],
+          ['b', '', '1002', '', ''],
+          ['c', '', '1003', '\u200Fغير  مذكور ', ''],
+          ['d', '', '1005', '\u200F', ''],
+          ['e', '', '1006', 'وكيل الشمال', ''],
+        ],
+        emptyTitle: 'غير مذكور',
+      );
+      expect(out.results.map((r) => r.title), [
+        'غير مذكور',
+        'غير مذكور',
+        'غير مذكور',
+        'غير مذكور',
+        'وكيل الشمال',
+      ]);
+      expect(out.titleOrder, ['غير مذكور', 'وكيل الشمال']);
+    },
+  );
+
   test('without the option the empty title stays ERP «صف_N»', () {
     final out = runPayrollAuditCore(
       managementRows: mgmtSheet,

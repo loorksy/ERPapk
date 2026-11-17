@@ -273,6 +273,10 @@ AuditCoreOutput runPayrollAuditCore({
           ? '#10b981'
           : managementColor;
 
+  final label =
+      emptyTitle == null || emptyTitle.trim().isEmpty
+          ? null
+          : emptyTitle.trim();
   final results = <AuditResultRow>[];
   final byTitle = <String, List<TitleItem>>{};
   final titleInsertion = <String>[];
@@ -282,11 +286,19 @@ AuditCoreOutput runPayrollAuditCore({
     final uid = normalizeUserId(cellAt(row, colC));
     final rawTitle = cellAt(row, colD);
     final trimmedTitle = (rawTitle ?? '').trim();
-    final fallback =
-        emptyTitle == null || emptyTitle.trim().isEmpty
-            ? 'صف_${i + 1}'
-            : emptyTitle.trim();
-    final title = trimmedTitle.isNotEmpty ? trimmedTitle : fallback;
+    final String title;
+    if (label == null) {
+      title = trimmedTitle.isNotEmpty ? trimmedTitle : 'صف_${i + 1}';
+    } else {
+      // Owner's «غير مذكور»: an empty cell, or the label typed by hand
+      // (even with invisible direction marks or extra spaces from a copy),
+      // all go to the one sheet of that name.
+      final cleaned = _cleanTitle(trimmedTitle);
+      title =
+          cleaned.isEmpty || cleaned == _cleanTitle(label)
+              ? label
+              : trimmedTitle;
+    }
     final agentMatches =
         uid.isNotEmpty
             ? (agentByUserId[uid] ?? const <AgentMatch>[])
@@ -366,6 +378,15 @@ AuditCoreOutput runPayrollAuditCore({
     agentByUserId: agentByUserId,
   );
 }
+
+final RegExp _invisibleMarks = RegExp(
+  '[\u200B-\u200F\u2060\uFEFF\u202A-\u202E\u2066-\u2069\u00A0]',
+);
+
+/// A title compared with the «غير مذكور» label: invisible marks removed,
+/// spaces collapsed.
+String _cleanTitle(String s) =>
+    s.replaceAll(_invisibleMarks, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
 
 class DuplicateCheck {
   const DuplicateCheck(this.duplicateIds, this.duplicateRowNumbers);
