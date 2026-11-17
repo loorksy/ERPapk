@@ -12,6 +12,7 @@ import 'payroll_page.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
 import 'sheet_page.dart';
+import 'sort_page.dart';
 import 'ui_kit.dart';
 import 'workspaces_card.dart';
 
@@ -20,8 +21,11 @@ import 'workspaces_card.dart';
 abstract final class AppTabs {
   static const sheet = 0;
   static const adjustments = 1;
-  static const search = 2;
-  static const settings = 3;
+
+  /// «فرز» (owner's request, 2026-11-17): tools on the user-info sheet.
+  static const sort = 2;
+  static const search = 3;
+  static const settings = 4;
 }
 
 /// What the screens can ask of the frame: switch tab, open a period's
@@ -58,9 +62,9 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   late int _index = widget.initialTab;
   final _periods = GlobalKey<SheetPageState>();
-  final _navs = List.generate(4, (_) => GlobalKey<NavigatorState>());
-  late final _observers = List.generate(4, (_) => _StackObserver(_onStack));
-  final _depth = List.filled(4, 0);
+  final _navs = List.generate(5, (_) => GlobalKey<NavigatorState>());
+  late final _observers = List.generate(5, (_) => _StackObserver(_onStack));
+  final _depth = List.filled(5, 0);
   bool _hasPeriods = false;
 
   @override
@@ -76,6 +80,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _current.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -94,7 +99,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   void _onStack() => WidgetsBinding.instance.addPostFrameCallback((_) {
     if (!mounted) return;
     var changed = false;
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 5; i++) {
       final d = _observers[i].depth;
       if (_depth[i] != d) {
         _depth[i] = d;
@@ -111,11 +116,15 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       return;
     }
     setState(() => _index = index);
+    _current.value = index;
   }
 
   /// A period's audit screen, inside the periods tab.
   Future<void> _openAudit(int cycleId) async {
-    if (_index != AppTabs.sheet) setState(() => _index = AppTabs.sheet);
+    if (_index != AppTabs.sheet) {
+      setState(() => _index = AppTabs.sheet);
+      _current.value = AppTabs.sheet;
+    }
     final nav = _navs[AppTabs.sheet].currentState;
     if (nav == null) return;
     nav.popUntil((r) => r.isFirst);
@@ -131,19 +140,39 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     await _periods.currentState?.refresh();
   }
 
-  Widget _tab(int i, Widget root) => Navigator(
+  /// The tab shown, for the first page of each tab: the route of that
+  /// page is built once, so it follows the tab through this notifier.
+  late final _current = ValueNotifier<int>(widget.initialTab);
+
+  /// A tab: its own navigator whose first page is [page] (told whether
+  /// its tab is the one shown).
+  Widget _tab(int i, Widget Function(bool active) page) => Navigator(
     key: _navs[i],
     observers: [_observers[i]],
     onGenerateRoute:
         (_) => MaterialPageRoute<void>(
-          builder: (_) => ColoredBox(color: Tw.paper, child: root),
+          builder:
+              (_) => ColoredBox(
+                color: Tw.paper,
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _current,
+                  builder: (_, current, _) => page(current == i),
+                ),
+              ),
         ),
   );
 
-  static const _labels = ['الفترات', 'التسويات', 'الاستعلام', 'الإعدادات'];
+  static const _labels = [
+    'الفترات',
+    'التسويات',
+    'فرز',
+    'الاستعلام',
+    'الإعدادات',
+  ];
   static const _icons = [
     (Icons.calendar_today_outlined, Icons.calendar_today),
     (Icons.exposure_outlined, Icons.exposure),
+    (Icons.call_split, Icons.call_split),
     (Icons.search, Icons.search),
     (Icons.settings_outlined, Icons.settings),
   ];
@@ -172,7 +201,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                 children: [
                   _tab(
                     AppTabs.sheet,
-                    SheetPage(
+                    (_) => SheetPage(
                       key: _periods,
                       onAudit: _openAudit,
                       onCount:
@@ -184,13 +213,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                   ),
                   _tab(
                     AppTabs.adjustments,
-                    AdjustmentsPage(active: _index == AppTabs.adjustments),
+                    (active) => AdjustmentsPage(active: active),
                   ),
-                  _tab(
-                    AppTabs.search,
-                    SearchPage(active: _index == AppTabs.search),
-                  ),
-                  _tab(AppTabs.settings, const SettingsPage()),
+                  _tab(AppTabs.sort, (active) => SortPage(active: active)),
+                  _tab(AppTabs.search, (active) => SearchPage(active: active)),
+                  _tab(AppTabs.settings, (_) => const SettingsPage()),
                 ],
               ),
             ),
@@ -210,7 +237,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                 selectedIndex: _index,
                 onDestinationSelected: goTo,
                 destinations: [
-                  for (var i = 0; i < 4; i++)
+                  for (var i = 0; i < 5; i++)
                     NavigationDestination(
                       icon: Icon(_icons[i].$1),
                       selectedIcon: Icon(_icons[i].$2),

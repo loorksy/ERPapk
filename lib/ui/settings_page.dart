@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../services/user_sheet_tools.dart';
 import '../version.dart';
 import 'erp_theme.dart';
 import 'columns_card.dart';
@@ -23,13 +24,21 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
   bool? _syncEnabled;
+  RoundingMode? _rounding;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final enabled = await AppScope.read(context).syncWorker.isEnabled();
-      if (mounted) setState(() => _syncEnabled = enabled);
+      final services = AppScope.read(context);
+      final enabled = await services.syncWorker.isEnabled();
+      final rounding = await services.userTools.defaultMode();
+      if (mounted) {
+        setState(() {
+          _syncEnabled = enabled;
+          _rounding = rounding;
+        });
+      }
     });
   }
 
@@ -90,6 +99,38 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _openMapping() => Navigator.of(
     context,
   ).push(MaterialPageRoute<void>(builder: (_) => const ColumnsPage()));
+
+  /// The default rounding of «فرز ← جبر الرواتب».
+  Future<void> _pickRounding() async {
+    final services = AppScope.read(context);
+    final current = _rounding ?? RoundingMode.floor;
+    final picked = await showAppSheet<RoundingMode>(
+      context,
+      (ctx) => AppSheet(
+        title: 'طريقة جبر الرواتب الافتراضية',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final m in RoundingMode.values)
+              ChoiceTile(
+                icon: m == current ? Icons.check : Icons.calculate_outlined,
+                label: '${m.label} — ${m.example}',
+                selected: m == current,
+                onTap: () => Navigator.pop(ctx, m),
+              ),
+            const Caption(
+              'تُستخدم في «فرز ← جبر الرواتب»، ويمكن اختيار غيرها هناك لعملية واحدة.',
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await services.userTools.setDefaultMode(picked);
+    if (!mounted) return;
+    setState(() => _rounding = picked);
+    showToast(context, 'الجبر الافتراضي: ${picked.label}', ToastType.success);
+  }
 
   /// `aboutSheet`.
   void _about() => showAppSheet<void>(
@@ -219,6 +260,17 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 trailing: const RowChevron(),
                 onTap: _openMapping,
+              ),
+              ListRow(
+                title: 'طريقة جبر الرواتب',
+                leading: IconChip(Icons.calculate_outlined),
+                subtitle: Text(
+                  _rounding == null
+                      ? '…'
+                      : '${_rounding!.label} (${_rounding!.term})',
+                ),
+                trailing: const RowChevron(),
+                onTap: _rounding == null ? null : _pickRounding,
               ),
             ],
           ),

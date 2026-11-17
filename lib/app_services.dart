@@ -11,6 +11,7 @@ import 'data/workspaces.dart';
 import 'google/google_auth.dart';
 import 'google/sheets_client.dart';
 import 'services/adjustments_service.dart';
+import 'services/user_sheet_tools.dart';
 import 'services/audit_job_runner.dart';
 import 'services/cycle_service.dart';
 import 'services/cycle_sync_worker.dart';
@@ -151,6 +152,7 @@ class AppServices extends ChangeNotifier {
     search = SearchService(db, () => sheets);
     syncWorker = CycleSyncWorker(db, () => sheets);
     adjustments = AdjustmentsService(db, () => sheets);
+    userTools = UserSheetTools(db, () => sheets);
     auth.changes.listen((_) => notifyListeners());
   }
 
@@ -175,6 +177,9 @@ class AppServices extends ChangeNotifier {
   late final SearchService search;
   late final CycleSyncWorker syncWorker;
   late final AdjustmentsService adjustments;
+
+  /// «فرز» section: sorting and salary rounding on the user-info sheet.
+  late final UserSheetTools userTools;
 
   /// ERP starts the cycle sync worker with the server; the app runs it
   /// while it is open (see AppShell) when enabled in Settings.

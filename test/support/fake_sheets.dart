@@ -188,6 +188,14 @@ class FakeSheets implements SheetsApi {
           byRow[row] = hex;
         }
         replies.add({});
+      } else if (r['updateCells'] != null &&
+          r['updateCells']['fields'] == 'userEnteredValue') {
+        // Clears the values of a whole sheet (Apps Script clearContents).
+        final sheetId = r['updateCells']['range']['sheetId'];
+        final title =
+            ids[id]!.entries.firstWhere((e) => e.value == sheetId).key;
+        books[id]![title]!.clear();
+        replies.add({});
       }
     }
     return replies;
