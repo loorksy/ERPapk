@@ -73,9 +73,9 @@ void main() {
     expect(c.results[0].status, 'باقي عليه');
     expect(c.results[0].debt, 10);
     expect(c.results[0].settlement, 'إضافة 30، خصم 50');
-    expect(c.results[0].displayStatus, 'باقي عليه (تسوية)');
+    expect(c.results[0].displayStatus, 'باقي عليه (مقاصة)');
     expect(salary(c, 2), '0.00');
-    expect(status(c, 2), 'تم خصم 20 (تسوية: إضافة 30، خصم 50)');
+    expect(status(c, 2), 'تم خصم 20 (مقاصة: إضافة 30، خصم 50)');
     // 1002 has only a deduction: ERP's line as is.
     expect(c.results[1].status, 'تم الخصم بالكامل');
     expect(salary(c, 3), '80.00');
@@ -95,9 +95,9 @@ void main() {
       sheet,
     );
     expect(salary(c, 3), '130.00');
-    expect(status(c, 3), 'تم اضافة 30 (تسوية: إضافة 50، خصم 20)');
+    expect(status(c, 3), 'تم اضافة 30 (مقاصة: إضافة 50، خصم 20)');
     expect(salary(c, 4), '40.00');
-    expect(status(c, 4), 'تمت التسوية (إضافة 15، خصم 15)');
+    expect(status(c, 4), 'تمت المقاصة (إضافة 15، خصم 15)');
     // «خصم كامل» is not netted: ERP order (all taken, then + 5).
     expect(c.results.where((r) => r.id == '1004').map((r) => r.status), [
       'تم خصم الدين',
@@ -167,7 +167,7 @@ void main() {
       '50',
       '',
       '1001',
-      'باقي عليه (تسوية)',
+      'باقي عليه (مقاصة)',
       '\$10',
     ]);
     expect(rows[4], ['9999', 'خصم', '5', '', '9999', 'غير موجود', '\$5']);
@@ -177,7 +177,7 @@ void main() {
       '30',
       '',
       '1001',
-      'ضمن التسوية (الصف 4)',
+      'ضمن المقاصة (الصف 4)',
       '',
     ]);
     expect(rows[6], isEmpty);
@@ -291,7 +291,7 @@ void main() {
         expect(job.cycleId, isNull);
         final rows = fake.books['ui']!['Data']!;
         expect(rows[1][11], '0.00');
-        expect(rows[1][14], 'تم خصم 20 (تسوية: إضافة 30، خصم 50)');
+        expect(rows[1][14], 'تم خصم 20 (مقاصة: إضافة 30، خصم 50)');
         expect(rows[4][11], '80.00');
         expect(rows[4][14], 'تم اضافة 5');
         expect(fake.log.where((l) => l.startsWith('BATCH VALUES')).length, 1);
@@ -386,8 +386,8 @@ void main() {
           ['إضافات وخصومات'],
         );
         final written = fake.books['ui']!['إضافات وخصومات']!;
-        expect(written[1].sublist(4), ['1001', 'باقي عليه (تسوية)', '\$10']);
-        expect(written[2].sublist(4, 6), ['1001', 'ضمن التسوية (الصف 2)']);
+        expect(written[1].sublist(4), ['1001', 'باقي عليه (مقاصة)', '\$10']);
+        expect(written[2].sublist(4, 6), ['1001', 'ضمن المقاصة (الصف 2)']);
         expect(
           written.any(
             (r) => r.length > 3 && r[0] == 'رقم المستخدم' && r[3] == 'الصافي',

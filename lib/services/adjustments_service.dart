@@ -14,7 +14,7 @@ import '../google/sheets_client.dart';
 /// in order on the updated salary.
 ///
 /// Owner's change: when one user has both additions and deductions in the
-/// list, they are first netted into one settlement (تسوية) at the place of
+/// list, they are first netted (مقاصة) into one operation at the place of
 /// the user's first line, and the status cell says what was done (تم خصم /
 /// تم اضافة) followed by the settlement. «خصم كامل» lines are not netted.
 ///
@@ -103,7 +103,7 @@ class AdjustmentsService {
         message:
             computed.results.isEmpty
                 ? 'لم تُقرأ أي أسطر صالحة (رقم ← نوع ← مبلغ).'
-                : 'تمت معالجة ${computed.results.length} عملية',
+                : 'طُبّقت ${computed.results.length} عملية',
         results: computed.results,
         summary: summarize(computed.results),
         spreadsheetUrl: meta.url,
@@ -498,9 +498,9 @@ class AdjustmentsService {
             'إضافة ${jsNumberToString(op.add!)}، خصم ${jsNumberToString(op.ded!)}';
         if (net == 0) {
           computed = SheetOp(
-            AdjustResult(id: '', status: 'تمت التسوية', amount: 0),
+            AdjustResult(id: '', status: 'تمت المقاصة', amount: 0),
             round2(current),
-            'تمت التسوية',
+            'تمت المقاصة',
             0,
             false,
           );
@@ -521,9 +521,9 @@ class AdjustmentsService {
       final statusText =
           settlement == null
               ? computed.statusText
-              : computed.statusText == 'تمت التسوية'
-              ? 'تمت التسوية ($settlement)'
-              : '${computed.statusText} (تسوية: $settlement)';
+              : computed.statusText == 'تمت المقاصة'
+              ? 'تمت المقاصة ($settlement)'
+              : '${computed.statusText} (مقاصة: $settlement)';
       salaryNow[found] = computed.newSalary;
       final prev = finalCells[found];
       finalCells[found] = AdjustWrite(
@@ -601,7 +601,7 @@ class AdjustmentsService {
       } else if (l.mergedInto >= 0) {
         e = [
           l.cells.isEmpty ? '' : l.cells.first,
-          'ضمن التسوية (الصف ${l.mergedInto + 2})',
+          'ضمن المقاصة (الصف ${l.mergedInto + 2})',
           '',
         ];
       }
@@ -965,9 +965,9 @@ class AdjustResult {
   final String? settlement;
 
   String get displayStatus =>
-      settlement == null || status == 'تمت التسوية'
+      settlement == null || status == 'تمت المقاصة'
           ? status
-          : '$status (تسوية)';
+          : '$status (مقاصة)';
 
   AdjustResult copyWith({required String id, String? settlement}) =>
       AdjustResult(

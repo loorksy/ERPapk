@@ -2,7 +2,6 @@
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../google/sheets_client.dart';
 import 'erp_theme.dart';
@@ -110,7 +109,7 @@ class _LinkDialogState extends State<_LinkDialog> {
                 width: 84,
                 child: ErpButton(
                   label: 'لصق',
-                  icon: FontAwesomeIcons.paste,
+                  icon: Icons.content_paste_outlined,
                   kind: ErpButtonKind.outline,
                   height: 46,
                   fontSize: 12,

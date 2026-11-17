@@ -8,7 +8,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
@@ -145,7 +144,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _targetSheets = sheets;
         _targetMessage =
-            sheets.isEmpty ? 'لا توجد أوراق في جدول الإدارة لهذه الدورة' : null;
+            sheets.isEmpty ? 'لا توجد أوراق في جدول الإدارة لهذه الفترة' : null;
       });
     } catch (e) {
       if (mounted) setState(() => _targetMessage = e.toString());
@@ -156,7 +155,7 @@ class _SearchPageState extends State<SearchPage> {
     if (_cycleId.isEmpty) {
       showToast(
         context,
-        'اختر الدورة التي تريد تدقيق المستخدم بها',
+        'اختر الفترة التي تريد تدقيق المستخدم فيها',
         ToastType.error,
       );
       return;
@@ -205,8 +204,8 @@ class _SearchPageState extends State<SearchPage> {
         .firstWhere((n) => n != null && n.isNotEmpty, orElse: () => null);
     if (name != null) b.writeln('الاسم: $name');
     for (final h in o.hits) {
-      if (_global0) b.writeln('— الدورة: ${h.cycleName}');
-      b.writeln('الحالة المنطقية: ${h.logicalStatus}');
+      if (_global0) b.writeln('— الفترة: ${h.cycleName}');
+      b.writeln('التصنيف: ${h.logicalStatus}');
       b.writeln('الراتب قبل الخصم: ${jsNumberToString(h.salaryBefore)}');
       b.writeln('الراتب بعد الخصم: ${jsNumberToString(h.salaryAfter)}');
       b.writeln(
@@ -247,367 +246,314 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  // ------------------------------------------------------------------ UI
+  //
+  // «Compact Fluid UI» (3.0): search-first — one field with paste, the
+  // scope (this period / all periods) as a segmented control, then the
+  // member card. Same queries, selective audit, copy and image export.
+
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
+    padding: Ds.pagePadding,
     children: [
       _criteria(),
-      if (_outcome != null) ...[gap, _resultCard()],
-    ],
-  );
-
-  Widget _sectionHeader(
-    FaIconData icon,
-    String title, {
-    List<Widget> actions = const [],
-    Color from = Tw.slate50,
-  }) => Container(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.centerRight,
-        end: Alignment.centerLeft,
-        colors: [from, Colors.white],
-      ),
-      border: const Border(bottom: BorderSide(color: Tw.slate100)),
-    ),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            FaIcon(icon, size: 13, color: Tw.indigo600),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: Tw.slate800,
-              ),
-            ),
-          ],
-        ),
-        if (actions.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          Row(children: actions),
-        ],
-      ],
-    ),
-  );
-
-  Widget _criteria() => Panel(
-    title: 'معايير البحث',
-    icon: FontAwesomeIcons.magnifyingGlass,
-    info:
-        'استعلام عن مستخدم برقمه في الدورة المختارة، أو في كل الدورات مع «البحث الشامل». يقرأ البحث آخر مزامنة للدورة (من التدقيق أو المزامنة التلقائية). «خصم %» يُطبَّق على الراتب المعروض. من النتيجة يمكن التدقيق الانتقائي لمستخدم واحد ونسخ البطاقة أو حفظها كصورة.',
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: EdgeInsets.zero,
+      if (_outcome != null) ...[const SizedBox(height: 14), _resultCard()],
+      if (_outcome == null)
+        const Padding(
+          padding: EdgeInsets.only(top: 40),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const FieldLabel('الدورة المالية', small: true, bold: true),
-              ErpSelect<String>(
-                thick: true,
-                muted: true,
-                options:
-                    _cycles.isEmpty
-                        ? const [SelectOption('', '— لا توجد دورات —')]
-                        : [
-                          const SelectOption('', '— اختر الدورة —'),
-                          for (final c in _cycles)
-                            SelectOption(
-                              '${c.id}',
-                              c.name.isEmpty ? 'دورة #${c.id}' : c.name,
-                            ),
-                        ],
-                value: _cycleId,
-                onChanged: (v) {
-                  setState(() => _cycleId = v);
-                  _debounced();
-                },
-              ),
-              const SizedBox(height: 16),
-              const FieldLabel('بيانات البحث', small: true, bold: true),
-              Row(
-                children: [
-                  Expanded(
-                    child: ErpTextField(
-                      controller: _userId,
-                      thick: true,
-                      hint: 'أدخل رقم المستخدم',
-                      keyboardType: TextInputType.number,
-                      onChanged: (_) => _debounced(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 96,
-                    child: ErpButton(
-                      label: 'لصق',
-                      icon: FontAwesomeIcons.paste,
-                      kind: ErpButtonKind.outline,
-                      height: 48,
-                      fontSize: 12,
-                      onPressed: _paste,
-                    ),
-                  ),
-                ],
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 14),
-                child: Divider(height: 1, color: Tw.slate100),
-              ),
-              Row(
-                children: [
-                  const Text(
-                    'خصم %',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Tw.slate600,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 112,
-                    child: ErpTextField(
-                      controller: _discount,
-                      thick: true,
-                      hint: '0',
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      onChanged: (_) => _debounced(),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xccf8fafc),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Tw.slate200),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 4,
-                ),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'البحث الشامل (كل الدورات)',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: Tw.slate700,
-                        ),
-                      ),
-                    ),
-                    Switch(
-                      value: _global,
-                      activeTrackColor: Tw.indigo600,
-                      inactiveTrackColor: Tw.slate600,
-                      inactiveThumbColor: Colors.white,
-                      onChanged: (v) {
-                        setState(() => _global = v);
-                        _debounced();
-                      },
-                    ),
-                  ],
-                ),
+              Icon(Icons.manage_search, size: 40, color: Tw.slate300),
+              SizedBox(height: 8),
+              Text(
+                'أدخل رقم المستخدم للاستعلام عن حالته وراتبه',
+                style: TextStyle(fontSize: 13, color: Tw.slate400),
               ),
             ],
           ),
         ),
+    ],
+  );
+
+  Widget _criteria() => Container(
+    decoration: panelDecoration(),
+    padding: const EdgeInsets.all(12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _userId,
+          keyboardType: TextInputType.number,
+          onChanged: (_) => _debounced(),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          decoration: InputDecoration(
+            hintText: 'رقم المستخدم',
+            fillColor: Tw.slate50,
+            prefixIcon: const Icon(Icons.search, size: 20, color: Tw.slate400),
+            suffixIcon: IconButton(
+              tooltip: 'لصق',
+              onPressed: _paste,
+              icon: const Icon(
+                Icons.content_paste_outlined,
+                size: 19,
+                color: Tw.slate500,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _Segmented(
+                options: const ['هذه الفترة', 'كل الفترات'],
+                selected: _global ? 1 : 0,
+                onChanged: (i) {
+                  setState(() => _global = i == 1);
+                  _debounced();
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 84,
+              child: TextField(
+                controller: _discount,
+                textDirection: TextDirection.ltr,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                onChanged: (_) => _debounced(),
+                style: const TextStyle(fontSize: 14),
+                decoration: const InputDecoration(
+                  hintText: '0',
+                  prefixIcon: Icon(Icons.percent, size: 16, color: Tw.slate400),
+                  prefixIconConstraints: BoxConstraints(minWidth: 30),
+                ),
+              ),
+            ),
+            const InfoTip(
+              'يُستعلم برقم المستخدم في فترة الرواتب المختارة، أو في كل الفترات. يقرأ الاستعلام آخر مزامنة للفترة (من التدقيق أو المزامنة التلقائية). النسبة % خصم يُطبَّق على الراتب المعروض. من النتيجة يمكن التدقيق الانتقائي لمستخدم واحد، ونسخ البطاقة أو حفظها كصورة.',
+              title: 'الاستعلام',
+            ),
+          ],
+        ),
+        if (!_global) ...[
+          const SizedBox(height: 8),
+          ErpSelect<String>(
+            muted: true,
+            options:
+                _cycles.isEmpty
+                    ? const [SelectOption('', '— لا توجد فترات —')]
+                    : [
+                      const SelectOption('', '— اختر الفترة —'),
+                      for (final c in _cycles)
+                        SelectOption(
+                          '${c.id}',
+                          c.name.isEmpty ? 'فترة #${c.id}' : c.name,
+                        ),
+                    ],
+            value: _cycleId,
+            onChanged: (v) {
+              setState(() => _cycleId = v);
+              _debounced();
+            },
+          ),
+        ],
       ],
     ),
   );
 
   Widget _resultCard() {
     final o = _outcome!;
-    return ErpCard(
+    return Container(
+      decoration: panelDecoration(),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _sectionHeader(
-            FontAwesomeIcons.userTag,
-            'نتيجة البحث',
-            from: const Color(0x80eef2ff),
-            actions: [
-              Expanded(
-                child: ErpButton(
-                  label: 'نسخ كبطاقة',
-                  icon: FontAwesomeIcons.copy,
-                  kind: ErpButtonKind.outline,
-                  height: 40,
-                  fontSize: 12,
-                  onPressed: _copyCard,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ErpButton(
-                  label: 'تنزيل كصورة',
-                  icon: FontAwesomeIcons.image,
-                  kind: ErpButtonKind.indigoSoft,
-                  height: 40,
-                  fontSize: 12,
-                  onPressed: _downloadImage,
-                ),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                RepaintBoundary(
-                  key: _cardKey,
-                  child: Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.all(4),
-                    child: _resultBody(o),
-                  ),
-                ),
-                if (_auditOpen) ...[
-                  const SizedBox(height: 16),
-                  _auditOptions(),
-                ],
-              ],
+          RepaintBoundary(
+            key: _cardKey,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: _resultBody(o),
             ),
           ),
+          if (o.success)
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Tw.slate200)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _copyCard,
+                      icon: const Icon(Icons.content_copy_outlined, size: 17),
+                      label: const Text('نسخ كبطاقة'),
+                    ),
+                  ),
+                  Container(width: 1, height: 24, color: Tw.slate200),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _downloadImage,
+                      icon: const Icon(Icons.image_outlined, size: 17),
+                      label: const Text('حفظ كصورة'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (_auditOpen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: _auditOptions(),
+            ),
         ],
       ),
     );
   }
 
-  Widget _line(String label, String value, {Widget? extra}) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Text.rich(
-      TextSpan(
-        style: const TextStyle(fontSize: 14, color: Tw.slate700, height: 1.5),
-        children: [
-          TextSpan(
-            text: '$label: ',
-            style: const TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Tw.slate600,
-            ),
-          ),
-          TextSpan(text: value),
-          if (extra != null) WidgetSpan(child: extra),
-        ],
-      ),
+  Widget _kv(String label, Widget value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      children: [Expanded(child: Text(label, style: Ds.secondary)), value],
     ),
   );
 
-  Widget _code(String text) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 4),
-    decoration: BoxDecoration(
-      color: Tw.slate100,
-      borderRadius: BorderRadius.circular(4),
+  Widget _num(double v) => Text(
+    jsNumberToString(v),
+    textDirection: TextDirection.ltr,
+    style: const TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+      color: Tw.slate900,
     ),
-    child: Text(
-      text,
-      textDirection: TextDirection.ltr,
-      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-    ),
+  );
+
+  Widget _auditBadge(CycleSearchHit h) => StatusBadge(
+    h.auditStatus,
+    tone: h.auditStatus == 'مدقق' ? Tone.success : Tone.warning,
+    icon: h.auditStatus == 'مدقق' ? Icons.check : Icons.schedule,
+  );
+
+  Widget _hitDetails(CycleSearchHit h) => Column(
+    children: [
+      _kv('التصنيف', StatusBadge(h.logicalStatus, tone: Tone.accent)),
+      _kv('الراتب قبل الخصم', _num(h.salaryBefore)),
+      _kv('الراتب بعد الخصم', _num(h.salaryAfter)),
+      _kv('حالة التدقيق', _auditBadge(h)),
+      if (h.auditSource != null)
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Text(h.auditSource!, style: Ds.secondary),
+        ),
+    ],
   );
 
   Widget _resultBody(SearchOutcome o) {
     if (!o.success) {
-      return Text(
-        o.message!,
-        style: const TextStyle(color: Tw.amber700, fontWeight: FontWeight.w500),
+      return Row(
+        children: [
+          const Icon(Icons.info_outline, size: 20, color: Tw.amber700),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              o.message!,
+              style: const TextStyle(
+                color: Tw.amber800,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       );
     }
     final first = o.hits.first;
     final name = o.hits
         .map((h) => h.name)
         .firstWhere((n) => n != null && n.isNotEmpty, orElse: () => null);
-    String audit(CycleSearchHit h) =>
-        h.auditStatus + (h.auditSource != null ? ' — ${h.auditSource}' : '');
-    final children = <Widget>[
-      Row(
-        children: [
-          const Text(
-            'رقم المستخدم: ',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Tw.slate600,
-            ),
-          ),
-          _code(first.memberId),
-        ],
-      ),
-      const SizedBox(height: 6),
-      if (name != null) _line('الاسم', name),
-    ];
-    if (_global0) {
-      children.add(
-        Text(
-          'عدد الدورات التي ظهر بها هذا المستخدم: ${o.hits.length}',
-          style: const TextStyle(fontSize: 12, color: Tw.slate500),
-        ),
-      );
-      children.add(const SizedBox(height: 12));
-      for (final h in o.hits) {
-        children.add(
-          Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Tw.slate200),
-              gradient: const LinearGradient(
-                colors: [Tw.slate50, Colors.white],
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _line('الدورة', h.cycleName),
-                _line('الحالة المنطقية', h.logicalStatus),
-                _line('الراتب قبل الخصم', jsNumberToString(h.salaryBefore)),
-                _line('الراتب بعد الخصم', jsNumberToString(h.salaryAfter)),
-                _line('حالة التدقيق', audit(h)),
-                if (h.canAudit) ...[
-                  const SizedBox(height: 8),
-                  ErpButton(
-                    label: 'تدقيق هذه الدورة',
-                    icon: FontAwesomeIcons.wandMagicSparkles,
-                    height: 44,
-                    fontSize: 13,
-                    onPressed: () {
-                      setState(() => _cycleId = '${h.cycleId}');
-                      _openAudit(h.memberId, h.logicalStatus);
-                    },
-                  ),
-                ],
-              ],
-            ),
-          ),
-        );
-      }
-    } else {
-      children.addAll([
-        _line('الحالة المنطقية', first.logicalStatus),
-        _line('الراتب قبل الخصم', jsNumberToString(first.salaryBefore)),
-        _line('الراتب بعد الخصم', jsNumberToString(first.salaryAfter)),
-        _line('حالة التدقيق', audit(first)),
-      ]);
-    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: children,
+      children: [
+        Row(
+          children: [
+            const IconChip(
+              Icons.person_outline,
+              size: 40,
+              color: Tw.indigo600,
+              bg: Tw.indigo50,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    first.memberId,
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Tw.slate900,
+                    ),
+                  ),
+                  if (name != null)
+                    Text(name, style: Ds.secondary, maxLines: 1),
+                ],
+              ),
+            ),
+            if (_global0)
+              StatusBadge('${o.hits.length} فترة', icon: Icons.layers_outlined),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
+        const SizedBox(height: 4),
+        if (!_global0)
+          _hitDetails(first)
+        else
+          for (final h in o.hits)
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              decoration: panelDecoration(color: Tw.slate50),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.calendar_month_outlined,
+                        size: 16,
+                        color: Tw.slate500,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          h.cycleName,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      if (h.canAudit)
+                        TextButton(
+                          onPressed: () {
+                            setState(() => _cycleId = '${h.cycleId}');
+                            _openAudit(h.memberId, h.logicalStatus);
+                          },
+                          child: const Text('تدقيق انتقائي'),
+                        ),
+                    ],
+                  ),
+                  _hitDetails(h),
+                ],
+              ),
+            ),
+      ],
     );
   }
 
@@ -618,11 +564,7 @@ class _SearchPageState extends State<SearchPage> {
     final showMgmt = isMgmt || !isAgent;
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0x99eef2ff),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Tw.indigo100),
-      ),
+      decoration: panelDecoration(color: Tw.slate50),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -639,7 +581,7 @@ class _SearchPageState extends State<SearchPage> {
                 ),
               ),
               InfoTip(
-                'اختر ورقة في جدول الإدارة أو اكتب اسماً لإنشاء ورقة جديدة في الدورة الحالية. يُلحق صف المستخدم بالورقة ويُلوَّن، وتُلوَّن صفوفه الأصلية في الإدارة والوكيل، وتُسجَّل حالته «تدقيق من أداة البحث».',
+                'اختر ورقة في جدول الإدارة أو اكتب اسماً لإنشاء ورقة جديدة في الفترة الحالية. يُلحق صف المستخدم بالورقة ويُلوَّن، وتُلوَّن صفوفه الأصلية في الإدارة والوكيل، وتُسجَّل حالته «تدقيق من أداة البحث».',
                 title: 'التدقيق الانتقائي',
               ),
             ],
@@ -680,7 +622,7 @@ class _SearchPageState extends State<SearchPage> {
           ],
           ErpButton(
             label: 'تنفيذ التدقيق الانتقائي',
-            icon: FontAwesomeIcons.circleCheck,
+            icon: Icons.check_circle_outline,
             loading: _executing,
             loadingLabel: 'جاري التنفيذ...',
             fontSize: 13,
@@ -690,4 +632,54 @@ class _SearchPageState extends State<SearchPage> {
       ),
     );
   }
+}
+
+/// A two-option segmented control (scope of the inquiry).
+class _Segmented extends StatelessWidget {
+  const _Segmented({
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+  final List<String> options;
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 44,
+    padding: const EdgeInsets.all(3),
+    decoration: BoxDecoration(
+      color: Tw.slate100,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      children: [
+        for (var i = 0; i < options.length; i++)
+          Expanded(
+            child: GestureDetector(
+              onTap: () => onChanged(i),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                decoration: BoxDecoration(
+                  color: i == selected ? Colors.white : Colors.transparent,
+                  borderRadius: BorderRadius.circular(9),
+                  border: i == selected ? Border.all(color: Tw.slate200) : null,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  options[i],
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight:
+                        i == selected ? FontWeight.w700 : FontWeight.w500,
+                    color: i == selected ? Tw.indigo700 : Tw.slate500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 }

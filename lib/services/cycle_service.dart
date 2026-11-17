@@ -74,7 +74,7 @@ class CycleService {
     String? agentSheetName,
     double? transferDiscountPct,
   }) async {
-    if (name.trim().isEmpty) throw Exception('أدخل اسم الدورة');
+    if (name.trim().isEmpty) throw Exception('أدخل اسم الفترة');
     var mRows = managementRows;
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
@@ -109,7 +109,7 @@ class CycleService {
     double? transferDiscountPct,
   }) async {
     final existing = await db.getCycleInfo(id);
-    if (existing == null) throw Exception('الدورة غير موجودة');
+    if (existing == null) throw Exception('الفترة غير موجودة');
     var mRows = managementRows;
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
@@ -145,7 +145,7 @@ class CycleService {
       return SyncOutcome(false, e.message, null, e.transient);
     } catch (e) {
       final m = e.toString();
-      return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الدورة من Google' : m);
+      return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الفترة من Google' : m);
     }
   }
 
@@ -155,13 +155,13 @@ class CycleService {
     String? userInfoSheetName,
   ) async {
     final cycle = await db.getCycleInfo(id);
-    if (cycle == null) return const SyncOutcome(false, 'الدورة غير موجودة');
+    if (cycle == null) return const SyncOutcome(false, 'الفترة غير موجودة');
     final mgmtSsId = cycle.managementSpreadsheetId;
     final agentSsId = cycle.agentSpreadsheetId;
     if (mgmtSsId == null || agentSsId == null) {
       return const SyncOutcome(
         false,
-        'هذه الدورة غير مرتبطة بجداول Google. أنشئ دورة جديدة من قسم Sheet باستخدام «استيراد من Google» ثم احفظها لتفعيل المزامنة.',
+        'هذه الفترة غير مرتبطة بجداول Google. أنشئ فترة جديدة من شاشة الفترات مصدرها Google Sheets ثم احفظها لتفعيل المزامنة.',
       );
     }
     final sheets = sheetsProvider();
@@ -220,14 +220,14 @@ class CycleService {
       detail += ' (ورقة "${agent.sheetTitleUsed}")';
     }
     if (userInfoSynced) {
-      detail += '، معلومات المستخدمين: $userInfoRowsCount صف';
+      detail += '، بيانات المستخدمين: $userInfoRowsCount صف';
       if (userInfoSheetUsed != null) detail += ' (ورقة "$userInfoSheetUsed")';
     }
     return SyncOutcome(
       true,
       userInfoSynced
-          ? 'تمت مزامنة جداول الدورة ومعلومات المستخدمين من Google'
-          : 'تمت مزامنة جداول الدورة من Google',
+          ? 'تمت مزامنة جداول الفترة وبيانات المستخدمين من Google'
+          : 'تمت مزامنة جداول الفترة من Google',
       detail,
     );
   }

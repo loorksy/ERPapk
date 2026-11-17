@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import 'erp_theme.dart';
 
@@ -21,19 +20,15 @@ void showToast(
     ToastType.success => (
       Tw.emerald600,
       Colors.white,
-      FontAwesomeIcons.circleCheck,
+      Icons.check_circle_outline,
     ),
-    ToastType.error => (
-      Tw.red600,
-      Colors.white,
-      FontAwesomeIcons.circleExclamation,
-    ),
+    ToastType.error => (Tw.red600, Colors.white, Icons.error_outline),
     ToastType.warning => (
       Tw.amber500,
       Colors.white,
-      FontAwesomeIcons.triangleExclamation,
+      Icons.warning_amber_outlined,
     ),
-    ToastType.info => (Tw.slate800, Colors.white, FontAwesomeIcons.circleInfo),
+    ToastType.info => (Tw.slate800, Colors.white, Icons.info_outline),
   };
   final messenger = ScaffoldMessenger.maybeOf(context);
   if (messenger == null) return;
@@ -47,7 +42,7 @@ void showToast(
         duration: Duration(seconds: type == ToastType.error ? 6 : 4),
         content: Row(
           children: [
-            FaIcon(icon, color: fg, size: 16),
+            Icon(icon, color: fg, size: 16),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -82,18 +77,11 @@ class ErpCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     clipBehavior: clip ? Clip.antiAlias : Clip.none,
-    // Same look as the redesigned panels (ui_kit.dart).
+    // Same surface as the panels of ui_kit.dart: white, hairline border.
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: const Color(0xffe8ecf2)),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x0a0f172a),
-          blurRadius: 12,
-          offset: Offset(0, 4),
-        ),
-      ],
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Tw.slate200),
     ),
     padding: padding,
     child: child,
@@ -201,11 +189,9 @@ class ErpSelect<T> extends StatelessWidget {
     final has = options.any((o) => o.value == value);
     final effective =
         has ? value : (options.isEmpty ? null : options.first.value);
-    final radius = BorderRadius.circular(thick ? 12 : 8);
-    final side = BorderSide(
-      color: thick ? Tw.slate200 : Tw.slate300,
-      width: thick ? 2 : 1,
-    );
+    // One compact style for every select (3.0): 44 px high, 12 px corners.
+    final radius = BorderRadius.circular(12);
+    const side = BorderSide(color: Tw.slate200);
     final callback =
         !enabled || onChanged == null
             ? null
@@ -219,7 +205,10 @@ class ErpSelect<T> extends StatelessWidget {
       decoration: InputDecoration(
         filled: true,
         fillColor: muted ? Tw.slate50 : Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 11,
+        ),
         border: OutlineInputBorder(borderRadius: radius, borderSide: side),
         enabledBorder: OutlineInputBorder(
           borderRadius: radius,
@@ -234,12 +223,9 @@ class ErpSelect<T> extends StatelessWidget {
         child: DropdownButton<T>(
           value: effective,
           isExpanded: true,
+          isDense: true,
           menuMaxHeight: 420,
-          icon: const FaIcon(
-            FontAwesomeIcons.chevronDown,
-            size: 12,
-            color: Tw.slate500,
-          ),
+          icon: const Icon(Icons.expand_more, size: 20, color: Tw.slate500),
           dropdownColor: Colors.white,
           borderRadius: BorderRadius.circular(12),
           style: const TextStyle(
@@ -290,7 +276,7 @@ class ErpButton extends StatelessWidget {
 
   final String label;
   final VoidCallback? onPressed;
-  final FaIconData? icon;
+  final IconData? icon;
   final ErpButtonKind kind;
   final bool loading;
   final String? loadingLabel;
@@ -304,11 +290,11 @@ class ErpButton extends StatelessWidget {
       ErpButtonKind.indigo => (Tw.indigo600, Colors.white, null),
       ErpButtonKind.emerald => (Tw.emerald600, Colors.white, null),
       ErpButtonKind.amber => (Tw.amber600, Colors.white, null),
-      ErpButtonKind.slate => (Tw.slate700, Colors.white, null),
+      ErpButtonKind.slate => (Tw.slate900, Colors.white, null),
       ErpButtonKind.danger => (Tw.red600, Colors.white, null),
-      ErpButtonKind.outline => (Colors.white, Tw.slate800, Tw.slate300),
+      ErpButtonKind.outline => (Colors.white, Tw.slate900, Tw.slate200),
       ErpButtonKind.soft => (Tw.slate100, Tw.slate700, null),
-      ErpButtonKind.indigoSoft => (Tw.indigo50, Tw.indigo800, Tw.indigo200),
+      ErpButtonKind.indigoSoft => (Tw.indigo50, Tw.indigo700, null),
     };
     final disabled = onPressed == null || loading;
     final child = Row(
@@ -322,13 +308,13 @@ class ErpButton extends StatelessWidget {
             child: CircularProgressIndicator(strokeWidth: 2, color: fg),
           )
         else if (icon != null)
-          FaIcon(
+          Icon(
             icon,
-            size: 13,
+            size: 18,
             color:
                 kind == ErpButtonKind.outline
                     ? Tw.slate500
-                    : fg.withValues(alpha: 0.9),
+                    : fg.withValues(alpha: 0.95),
           ),
         if (loading || icon != null) const SizedBox(width: 8),
         Flexible(
@@ -337,7 +323,7 @@ class ErpButton extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontFamily: erpFont,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w600,
               fontSize: fontSize,
               color: fg,
             ),
@@ -352,14 +338,14 @@ class ErpButton extends StatelessWidget {
         width: expand ? double.infinity : null,
         child: Material(
           color: bg,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           child: InkWell(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
             onTap: disabled ? null : onPressed,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(12),
                 border: border == null ? null : Border.all(color: border),
               ),
               child: child,
@@ -396,11 +382,8 @@ class ErpTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(thick ? 12 : 8);
-    final side = BorderSide(
-      color: thick ? Tw.slate200 : Tw.slate300,
-      width: thick ? 2 : 1,
-    );
+    final radius = BorderRadius.circular(12);
+    const side = BorderSide(color: Tw.slate200);
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
@@ -422,7 +405,7 @@ class ErpTextField extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: radius,
-          borderSide: const BorderSide(color: Tw.indigo500, width: 2),
+          borderSide: const BorderSide(color: Tw.indigo600, width: 1.5),
         ),
       ),
     );
@@ -469,20 +452,20 @@ class _ColorFieldState extends State<ColorField> {
     children: [
       InkWell(
         onTap: _pick,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           width: 44,
           height: 44,
-          padding: const EdgeInsets.all(4),
+          padding: const EdgeInsets.all(5),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Tw.slate300),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Tw.slate200),
             color: Colors.white,
           ),
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: hexColor(widget.value),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(8),
             ),
           ),
         ),
@@ -600,14 +583,14 @@ class ErpBadge extends StatelessWidget {
     required this.border,
   });
   final String label;
-  final FaIconData icon;
+  final IconData icon;
   final Color bg;
   final Color fg;
   final Color border;
 
   factory ErpBadge.google() => const ErpBadge(
     label: 'مرتبطة بـ Google',
-    icon: FontAwesomeIcons.link,
+    icon: Icons.link,
     bg: Tw.emerald50,
     fg: Tw.emerald800,
     border: Tw.emerald200,
@@ -615,7 +598,7 @@ class ErpBadge extends StatelessWidget {
 
   factory ErpBadge.local() => const ErpBadge(
     label: 'ملفات محلية',
-    icon: FontAwesomeIcons.file,
+    icon: Icons.description_outlined,
     bg: Tw.amber50,
     fg: Tw.amber900,
     border: Tw.amber200,
@@ -632,7 +615,7 @@ class ErpBadge extends StatelessWidget {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        FaIcon(icon, size: 10, color: fg),
+        Icon(icon, size: 10, color: fg),
         const SizedBox(width: 4),
         Text(
           label,
@@ -682,7 +665,7 @@ class NoticeBox extends StatelessWidget {
 /// A confirmation dialog in the style of ERP's delete modal.
 Future<bool> confirmDialog(
   BuildContext context, {
-  required FaIconData icon,
+  required IconData icon,
   required String title,
   required String body,
   required String confirmLabel,
@@ -713,7 +696,7 @@ Future<bool> confirmDialog(
                         shape: BoxShape.circle,
                       ),
                       alignment: Alignment.center,
-                      child: FaIcon(icon, color: iconColor, size: 22),
+                      child: Icon(icon, color: iconColor, size: 22),
                     ),
                     const SizedBox(height: 14),
                     Text(

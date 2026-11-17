@@ -193,7 +193,7 @@ void main() {
     final id = await linkedCycle();
     final before = await search.searchUser(id, '1001', 0);
     expect(before.success, isFalse);
-    expect(before.message, contains('لم يتم مزامنة الدورة بعد'));
+    expect(before.message, contains('لم تتم مزامنة الفترة بعد'));
     final all = await search.searchAcrossCycles('1001', 0);
     expect(all.success, isFalse);
   });
@@ -205,10 +205,7 @@ void main() {
       final cycles = CycleService(db, () => fake);
       final r = await cycles.syncCycle(id, userInfoSpreadsheetId: 'ui');
       expect(r.success, isTrue, reason: r.message);
-      expect(
-        r.message,
-        'تمت مزامنة جداول الدورة ومعلومات المستخدمين من Google',
-      );
+      expect(r.message, 'تمت مزامنة جداول الفترة وبيانات المستخدمين من Google');
       final cycle = await db.getCycle(id);
       expect(cycle!.managementRows.length, mgmt.length);
 

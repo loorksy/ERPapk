@@ -128,7 +128,7 @@ class SearchService {
     );
     return CycleSearchHit(
       cycleId: cycle.id,
-      cycleName: cycle.name.isEmpty ? 'دورة #${cycle.id}' : cycle.name,
+      cycleName: cycle.name.isEmpty ? 'فترة #${cycle.id}' : cycle.name,
       memberId: canonicalId ?? queryId,
       name: name,
       logicalStatus: logicalStatus,
@@ -152,10 +152,10 @@ class SearchService {
       return const SearchOutcome.fail('رقم المستخدم غير صالح');
     }
     final cycle = await db.getCycleInfo(cycleId);
-    if (cycle == null) return const SearchOutcome.fail('الدورة غير موجودة');
+    if (cycle == null) return const SearchOutcome.fail('الفترة غير موجودة');
     if (!await db.hasCycleCache(cycle.id)) {
       return const SearchOutcome.fail(
-        'لم يتم مزامنة الدورة بعد. انتظر المزامنة الخلفية أو نفّذ التدقيق من قسم الرواتب.',
+        'لم تتم مزامنة الفترة بعد. انتظر المزامنة التلقائية أو نفّذ التدقيق من شاشة التدقيق.',
       );
     }
     final hit = await _searchInCycle(cycle, queryId, discountRate);
@@ -195,7 +195,7 @@ class SearchService {
     }
     if (hits.isEmpty) {
       return const SearchOutcome.fail(
-        'رقم المستخدم غير موجود في أي دورة مالية حالية',
+        'رقم المستخدم غير موجود في أي فترة رواتب حالية',
       );
     }
     return SearchOutcome.ok(hits);
@@ -255,18 +255,18 @@ class SearchService {
     if (member.isEmpty) {
       return const IndividualAuditResult(
         false,
-        'اختر الدورة وأدخل رقم المستخدم أولاً',
+        'اختر الفترة وأدخل رقم المستخدم أولاً',
       );
     }
     final cycle = await db.getCycleInfo(cycleId);
     if (cycle == null) {
-      return const IndividualAuditResult(false, 'الدورة غير موجودة');
+      return const IndividualAuditResult(false, 'الفترة غير موجودة');
     }
     final data = await _data(cycle);
     if (data == null) {
       return const IndividualAuditResult(
         false,
-        'لم يتم مزامنة هذه الدورة بعد. انتظر المزامنة الخلفية أو نفّذ مزامنة من قسم Sheet.',
+        'لم تتم مزامنة هذه الفترة بعد. انتظر المزامنة التلقائية أو حمّل الفترة من شاشة التدقيق.',
       );
     }
     final cols = await db.getCycleColumns(cycleId);
@@ -300,7 +300,7 @@ class SearchService {
     if (!inMgmt && !inAgent) {
       return const IndividualAuditResult(
         false,
-        'هذا المستخدم غير موجود في بيانات الدورة المختارة',
+        'هذا المستخدم غير موجود في بيانات الفترة المختارة',
       );
     }
     final salary = computeSalaryWithDiscount([
@@ -368,7 +368,7 @@ class SearchService {
       if (mgmtRow != null && !existingIds.contains(member)) {
         target.add(TargetRow(List<String>.from(mgmtRow), rowColor));
         message =
-            'تم تنفيذ التدقيق الانتقائي في ملف الدورة على الهاتف وتحديث حالة البحث';
+            'تم تنفيذ التدقيق الانتقائي في ملف الفترة على الهاتف وتحديث حالة البحث';
       } else {
         message =
             'المستخدم موجود مسبقاً في الورقة الهدف. لم يُكرر الصف، وحُدّثت الألوان والحالة.';

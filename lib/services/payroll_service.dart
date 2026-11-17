@@ -92,9 +92,7 @@ class PayrollService {
     final discountRatePct = resolveDiscount(req.discountRate, settings);
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(
-        PayrollResult.fail('الدورة المالية غير موجودة'),
-      );
+      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
     }
 
     final sheets = sheetsProvider();
@@ -107,7 +105,7 @@ class PayrollService {
 
     var cycleSynced = false;
     if (mgmtSsId != null && agentSsId != null) {
-      progress('1/2 مزامنة جداول الدورة من Google...');
+      progress('1/2 مزامنة جداول الفترة من Google...');
       try {
         final mgmtResult = await fetchSheetWithFallback(
           sheets,
@@ -136,7 +134,7 @@ class PayrollService {
       } catch (_) {}
     }
 
-    progress('1/2 قراءة جدول معلومات المستخدمين...');
+    progress('1/2 قراءة جدول بيانات المستخدمين...');
     final spreadsheetId = ui.spreadsheetId;
     final meta = await withSheetsRetry(
       () => sheets.getSpreadsheet(spreadsheetId),
@@ -158,7 +156,7 @@ class PayrollService {
         !req.forceReaudit) {
       return PreparedAudit.fail(
         PayrollResult.fail(
-          'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة.',
+          'لم يتغيّر جدول بيانات المستخدمين من آخر تدقيق ناجح. عدّل الجدول ثم أعد المحاولة.',
           code: 'USER_INFO_UNCHANGED',
           url: spreadsheetUrl,
         ),
@@ -178,7 +176,7 @@ class PayrollService {
     final duplicates = findDuplicateGroups(out);
     if (duplicates.isNotEmpty) {
       progress(
-        '1/2 تم العثور على ${duplicates.length} رقم مكرر في جدول معلومات المستخدمين — يُدقق أول صف لكل رقم فقط',
+        '1/2 تم العثور على ${duplicates.length} رقم مكرر في جدول بيانات المستخدمين — يُدقق أول صف لكل رقم فقط',
       );
     }
     final skipped = {for (final d in duplicates) ...d.skippedRows};
@@ -300,14 +298,14 @@ class PayrollService {
   static String describeStep(Map<String, Object?> step) {
     switch (step['k']) {
       case 'createCycleSpreadsheet':
-        return '2/2 إنشاء جدول Google للدورة...';
+        return '2/2 إنشاء جدول Google للفترة...';
       case 'addSheets':
         return '2/2 إنشاء أوراق الوجهة في جدول الإدارة...';
       case 'copy':
         final n = (step['rows'] as List).length;
         return '2/2 نسخ $n صف إلى ورقة «${step['sheet']}»...';
       case 'values':
-        return '2/2 كتابة ${step['what']} في جدول معلومات المستخدمين...';
+        return '2/2 كتابة ${step['what']} في جدول بيانات المستخدمين...';
       case 'color':
         final n = (step['rows'] as Map).length;
         return step['sheetOf'] == 'management'
@@ -315,7 +313,7 @@ class PayrollService {
             : '2/2 تلوين $n صف في ورقة الوكيل...';
       case 'appendUserInfo':
         final n = (step['rows'] as List).length;
-        return '2/2 إضافة $n رقم إلى جدول معلومات المستخدمين...';
+        return '2/2 إضافة $n رقم إلى جدول بيانات المستخدمين...';
       case 'colorTargetIds':
         return '2/2 تلوين الصفوف المنسوخة في ورقة «${step['sheet']}»...';
       case 'finish':
@@ -348,7 +346,7 @@ class PayrollService {
     }
     // Light record (links and sheet names); the data only where needed.
     final info = await db.getCycleInfo(plan.cycleId);
-    if (info == null) throw Exception('الدورة المالية غير موجودة');
+    if (info == null) throw Exception('فترة الرواتب غير موجودة');
     var cycle = info;
     final sheets = sheetsProvider();
     switch (kind) {
@@ -356,10 +354,10 @@ class PayrollService {
         if (cycle.linkedToGoogle) return; // already done before a restart
         cycle = (await db.getCycle(plan.cycleId))!;
         final cycleName =
-            cycle.name.trim().isEmpty ? 'دورة' : cycle.name.trim();
+            cycle.name.trim().isEmpty ? 'فترة' : cycle.name.trim();
         final dateStr = DateTime.now().toIso8601String().substring(0, 10);
         final newId = await withSheetsRetry(
-          () => sheets.createSpreadsheet('دورة $cycleName - $dateStr', const [
+          () => sheets.createSpreadsheet('فترة $cycleName - $dateStr', const [
             'الإدارة',
             'الوكيل',
           ]),
@@ -396,7 +394,7 @@ class PayrollService {
         } on SheetsApiException catch (e) {
           if (e.transient) rethrow;
           throw Exception(
-            'لا يمكن الوصول إلى جدول الإدارة (الدورة). تأكد أن الدورة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
+            'لا يمكن الوصول إلى جدول الإدارة (الفترة). تأكد أن الفترة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
           );
         }
         final existing = {for (final s in meta.sheets) s.title.toLowerCase()};
@@ -594,15 +592,15 @@ class PayrollService {
     final settings = await db.getPayrollSettings();
     final discountRatePct = resolveDiscount(req.discountRate, settings);
     final cycle = await db.getCycle(req.cycleId);
-    if (cycle == null) return PayrollResult.fail('الدورة المالية غير موجودة');
+    if (cycle == null) return PayrollResult.fail('فترة الرواتب غير موجودة');
     final managementRows = cycle.managementRows;
     final agentRows = cycle.agentRows;
     if (ui.rows.isEmpty) {
-      return PayrollResult.fail('ملف معلومات المستخدمين فارغ.');
+      return PayrollResult.fail('ملف بيانات المستخدمين فارغ.');
     }
     if (managementRows.isEmpty && agentRows.isEmpty) {
       return PayrollResult.fail(
-        'بيانات الإدارة أو الوكيل فارغة. زامن الدورة أو أعد رفع الملفات.',
+        'بيانات الإدارة أو الوكيل فارغة. زامن الفترة أو أعد رفع الملفات.',
       );
     }
     progress('تدقيق على الهاتف...');
@@ -612,7 +610,7 @@ class PayrollService {
         cycle.userInfoHash == userInfoHash &&
         !req.forceReaudit) {
       return PayrollResult.fail(
-        'لم يتغيّر جدول معلومات المستخدمين من آخر تدقيق ناجح. عدّل الملف ثم أعد المحاولة.',
+        'لم يتغيّر جدول بيانات المستخدمين من آخر تدقيق ناجح. عدّل الملف ثم أعد المحاولة.',
         code: 'USER_INFO_UNCHANGED',
       );
     }
@@ -764,13 +762,11 @@ class PayrollService {
     final ui = req.userInfo as GoogleUserInfo;
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(
-        PayrollResult.fail('الدورة المالية غير موجودة'),
-      );
+      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
     }
     if (!cycle.linkedToGoogle) {
       return PreparedAudit.fail(
-        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
+        PayrollResult.fail('هذه العملية متاحة لفترات Google فقط.'),
       );
     }
     final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
@@ -783,7 +779,7 @@ class PayrollService {
       );
     }
     final sheets = sheetsProvider();
-    progress('1/2 قراءة جدول معلومات المستخدمين...');
+    progress('1/2 قراءة جدول بيانات المستخدمين...');
     final meta = await withSheetsRetry(
       () => sheets.getSpreadsheet(ui.spreadsheetId),
     );
@@ -820,7 +816,7 @@ class PayrollService {
           result: PayrollResult(
             success: true,
             message:
-                'لا يوجد مستخدمون غير مذكورين: كل أرقام ورقة الوكيل موجودة في جدول معلومات المستخدمين.',
+                'لا يوجد مستخدمون غير مذكورين: كل أرقام ورقة الوكيل موجودة في جدول بيانات المستخدمين.',
             spreadsheetUrl: meta.url,
           ),
           finish: const {},
@@ -952,7 +948,7 @@ class PayrollService {
         result: PayrollResult(
           success: true,
           message:
-              'أُضيف ${missing.length} رقم من ورقة الوكيل إلى جدول معلومات المستخدمين (${firstNew == last ? 'الصف $firstNew' : 'الصفوف $firstNew–$last'}) بعنوان «${opts.label}» ودُققت',
+              'أُضيف ${missing.length} رقم من ورقة الوكيل إلى جدول بيانات المستخدمين (${firstNew == last ? 'الصف $firstNew' : 'الصفوف $firstNew–$last'}) بعنوان «${opts.label}» ودُققت',
           summary: summary,
           applied: true,
           spreadsheetUrl: meta.url,
@@ -990,14 +986,12 @@ class PayrollService {
     final ui = req.userInfo as GoogleUserInfo;
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(
-        PayrollResult.fail('الدورة المالية غير موجودة'),
-      );
+      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
     }
     final mgmtSsId = cycle.managementSpreadsheetId;
     if (!cycle.linkedToGoogle || mgmtSsId == null) {
       return PreparedAudit.fail(
-        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
+        PayrollResult.fail('هذه العملية متاحة لفترات Google فقط.'),
       );
     }
     final sheets = sheetsProvider();
@@ -1021,7 +1015,7 @@ class PayrollService {
       ),
     );
 
-    progress('1/2 قراءة جدول معلومات المستخدمين...');
+    progress('1/2 قراءة جدول بيانات المستخدمين...');
     final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
     final uiMeta = await withSheetsRetry(
       () => sheets.getSpreadsheet(ui.spreadsheetId),
@@ -1173,7 +1167,7 @@ class PayrollService {
       final id = normalizeUserId(cellAt(current[i], idCol));
       if (id != normalizeUserId(cellAt(rows[i], idCol))) {
         throw Exception(
-          'تغيّر جدول معلومات المستخدمين بعد بدء العملية (توجد بيانات أخرى في الصف ${startRow + i}). لم يُكتب شيء فوقها؛ أعد تشغيل «تدقيق غير المذكورين».',
+          'تغيّر جدول بيانات المستخدمين بعد بدء العملية (توجد بيانات أخرى في الصف ${startRow + i}). لم يُكتب شيء فوقها؛ أعد تشغيل «تدقيق غير المذكورين».',
         );
       }
     }
@@ -1183,7 +1177,7 @@ class PayrollService {
       if (s.title == title) props = s;
     }
     if (props == null) {
-      throw Exception('الورقة «$title» غير موجودة في جدول معلومات المستخدمين.');
+      throw Exception('الورقة «$title» غير موجودة في جدول بيانات المستخدمين.');
     }
     final gridRows = props.rowCount;
     if (gridRows != null && gridRows < endRow) {
@@ -1522,10 +1516,10 @@ class PayrollService {
         localOnly ? 'تم تنفيذ التدقيق على الهاتف' : 'تم تنفيذ التدقيق';
     if (summary.total == 0) {
       message =
-          'لم تُقرأ أي صفوف من جدول معلومات المستخدمين. تحقق من أن الورقة تحتوي بيانات وأن عمود رقم المستخدم وعمود اسم الورقة مملوءان.';
+          'لم تُقرأ أي صفوف من جدول بيانات المستخدمين. تحقق من أن الورقة تحتوي بيانات وأن عمود رقم المستخدم وعمود اسم الورقة مملوءان.';
     } else if (appliedCount == 0) {
       message =
-          'لم يُطابق أي صف (0 سحب وكالة، 0 سحب إدارة). يُقارن رقم المستخدم من عمود معلومات المستخدمين مع عمودي الإدارة والوكيل. تحقق من تطابق الأرقام أو من اختيار الأعمدة الصحيحة (انظر العينة أدناه).';
+          'لم يُطابق أي صف (0 سحب وكالة، 0 سحب إدارة). يُقارن رقم المستخدم من عمود بيانات المستخدمين مع عمودي الإدارة والوكيل. تحقق من تطابق الأرقام أو من اختيار الأعمدة الصحيحة (انظر العينة أدناه).';
     }
 
     final sampleUserIds = <String>[];

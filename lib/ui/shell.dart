@@ -2,7 +2,6 @@
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../app_services.dart';
 import 'adjustments_page.dart';
@@ -14,8 +13,6 @@ import 'settings_page.dart';
 import 'sheet_page.dart';
 import 'workspaces_card.dart';
 
-/// Mobile layout of the ERP dashboard: white top header with the page title
-/// in indigo and the white bottom navigation bar.
 /// Bottom navigation tabs.
 abstract final class AppTabs {
   static const sheet = 0;
@@ -25,6 +22,8 @@ abstract final class AppTabs {
   static const settings = 4;
 }
 
+/// The frame of «المدقق»: a compact top bar (page title, workspace menu,
+/// the page's main action) and the bottom navigation.
 class AppShell extends StatefulWidget {
   const AppShell({super.key, this.initialTab = 1});
   final int initialTab;
@@ -33,14 +32,17 @@ class AppShell extends StatefulWidget {
 }
 
 class _NavItem {
-  const _NavItem(this.icon, this.label, this.title);
-  final FaIconData icon;
+  const _NavItem(this.icon, this.activeIcon, this.label, this.title);
+  final IconData icon;
+  final IconData activeIcon;
   final String label;
   final String title;
 }
 
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   late int _index = widget.initialTab;
+  final _periods = GlobalKey<SheetPageState>();
+  final _audit = GlobalKey<PayrollPageState>();
 
   @override
   void initState() {
@@ -71,38 +73,121 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   }
 
   static const _items = [
-    _NavItem(FontAwesomeIcons.fileExcel, 'Sheet', 'Sheet'),
-    _NavItem(FontAwesomeIcons.moneyCheckDollar, 'تدقيق راتب', 'تدقيق الرواتب'),
     _NavItem(
-      FontAwesomeIcons.scaleBalanced,
-      'إضافات وخصومات',
-      'إضافات وخصومات',
+      Icons.calendar_month_outlined,
+      Icons.calendar_month,
+      'الفترات',
+      'فترات الرواتب',
     ),
-    _NavItem(FontAwesomeIcons.magnifyingGlass, 'البحث', 'البحث'),
-    _NavItem(FontAwesomeIcons.gear, 'الإعدادات', 'الإعدادات'),
+    _NavItem(
+      Icons.fact_check_outlined,
+      Icons.fact_check,
+      'التدقيق',
+      'تدقيق الرواتب',
+    ),
+    _NavItem(
+      Icons.balance_outlined,
+      Icons.balance,
+      'التسويات',
+      'تسويات الرواتب',
+    ),
+    _NavItem(
+      Icons.manage_search,
+      Icons.manage_search,
+      'الاستعلام',
+      'الاستعلام',
+    ),
+    _NavItem(Icons.settings_outlined, Icons.settings, 'الإعدادات', 'الإعدادات'),
   ];
 
   void goTo(int index) => setState(() => _index = index);
 
-  /// Page title, and under it the open workspace: tapping it drops the
-  /// workspace menu down from the top bar (owner's request, 2026-11-17).
-  Widget _title(BuildContext context) {
+  /// From the periods list: audit that period.
+  void _auditPeriod(int cycleId) {
+    goTo(AppTabs.payroll);
+    _audit.currentState?.openCycle(cycleId);
+  }
+
+  // ------------------------------------------------------------ top bar
+
+  Widget _topBar(BuildContext context) {
     final services = AppScope.of(context);
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Tw.slate200)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: 56,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(start: 16, end: 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _items[_index].title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Tw.slate900,
+                    ),
+                  ),
+                ),
+                _workspaceMenu(context, services),
+                if (_index == AppTabs.sheet) ...[
+                  const SizedBox(width: 4),
+                  Tooltip(
+                    message: 'فترة رواتب جديدة',
+                    child: InkResponse(
+                      radius: 22,
+                      onTap: () => _periods.currentState?.openCreate(),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        margin: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Tw.indigo600,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.add,
+                          size: 20,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The open workspace (named only when there are several) and the menu
+  /// to switch, add or manage workspaces (owner's request: from the top
+  /// bar).
+  Widget _workspaceMenu(BuildContext context, AppServices services) {
     final host = services.host;
     final activeId = services.workspace.id;
+    final several = host.workspaces.length > 1;
     return PopupMenuButton<int>(
       tooltip: 'مساحات العمل',
       position: PopupMenuPosition.under,
-      offset: const Offset(0, 6),
-      constraints: const BoxConstraints(minWidth: 240, maxWidth: 320),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: Colors.white,
+      offset: const Offset(0, 4),
+      constraints: const BoxConstraints(minWidth: 230, maxWidth: 300),
       onSelected: (v) => _onWorkspaceMenu(context, v),
       itemBuilder:
           (_) => [
             const PopupMenuItem<int>(
               enabled: false,
-              height: 32,
+              height: 30,
               child: Text(
                 'مساحات العمل',
                 style: TextStyle(
@@ -115,13 +200,14 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             for (final w in host.workspaces)
               PopupMenuItem<int>(
                 value: w.id,
+                height: 44,
                 child: Row(
                   children: [
-                    FaIcon(
+                    Icon(
                       w.id == activeId
-                          ? FontAwesomeIcons.solidCircleCheck
-                          : FontAwesomeIcons.briefcase,
-                      size: 14,
+                          ? Icons.check_circle
+                          : Icons.work_outline,
+                      size: 18,
                       color: w.id == activeId ? Tw.indigo600 : Tw.slate400,
                     ),
                     const SizedBox(width: 10),
@@ -135,90 +221,70 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                               w.id == activeId
                                   ? FontWeight.w700
                                   : FontWeight.w500,
-                          color: w.id == activeId ? Tw.indigo700 : Tw.slate800,
+                          color: w.id == activeId ? Tw.indigo700 : Tw.slate900,
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-            const PopupMenuDivider(),
+            const PopupMenuDivider(height: 8),
             const PopupMenuItem<int>(
               value: _addWorkspace,
+              height: 44,
               child: Row(
                 children: [
-                  FaIcon(FontAwesomeIcons.plus, size: 13, color: Tw.indigo600),
+                  Icon(Icons.add, size: 18, color: Tw.indigo600),
                   SizedBox(width: 10),
-                  Text(
-                    'إضافة مساحة عمل',
-                    style: TextStyle(fontSize: 14, color: Tw.indigo700),
-                  ),
+                  Text('مساحة عمل جديدة', style: TextStyle(fontSize: 14)),
                 ],
               ),
             ),
             const PopupMenuItem<int>(
               value: _manageWorkspaces,
+              height: 44,
               child: Row(
                 children: [
-                  FaIcon(FontAwesomeIcons.gear, size: 13, color: Tw.slate500),
+                  Icon(Icons.settings_outlined, size: 18, color: Tw.slate500),
                   SizedBox(width: 10),
-                  Text(
-                    'إدارة مساحات العمل',
-                    style: TextStyle(fontSize: 14, color: Tw.slate700),
-                  ),
+                  Text('إدارة مساحات العمل', style: TextStyle(fontSize: 14)),
                 ],
               ),
             ),
           ],
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            _items[_index].title,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Tw.indigo600,
-              fontWeight: FontWeight.w700,
-              fontSize: 17,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-            decoration: BoxDecoration(
-              color: Tw.slate100,
-              borderRadius: BorderRadius.circular(99),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const FaIcon(
-                  FontAwesomeIcons.briefcase,
-                  size: 10,
-                  color: Tw.slate500,
-                ),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    services.workspace.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                      color: Tw.slate600,
-                    ),
+      child: Container(
+        height: 34,
+        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+        padding: EdgeInsets.symmetric(horizontal: several ? 10 : 8),
+        decoration: BoxDecoration(
+          color: Tw.slate50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Tw.slate200),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.work_outline, size: 16, color: Tw.slate600),
+            if (several) ...[
+              const SizedBox(width: 6),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 110),
+                child: Text(
+                  services.workspace.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: Tw.slate700,
                   ),
                 ),
-                const SizedBox(width: 4),
-                const FaIcon(
-                  FontAwesomeIcons.chevronDown,
-                  size: 8,
-                  color: Tw.slate500,
-                ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+            const SizedBox(width: 2),
+            const Icon(Icons.expand_more, size: 16, color: Tw.slate500),
+          ],
+        ),
       ),
     );
   }
@@ -252,52 +318,88 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     await host.switchTo(value, tab: _index);
   }
 
+  // ------------------------------------------------------- bottom nav
+
+  Widget _bottomNav() => Container(
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      border: Border(top: BorderSide(color: Tw.slate200)),
+    ),
+    child: SafeArea(
+      top: false,
+      child: SizedBox(
+        height: 62,
+        child: Row(
+          children: [
+            for (var i = 0; i < _items.length; i++)
+              Expanded(
+                child: Semantics(
+                  selected: i == _index,
+                  button: true,
+                  label: _items[i].label,
+                  child: InkResponse(
+                    onTap: () => goTo(i),
+                    radius: 34,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: 48,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color:
+                                i == _index ? Tw.indigo50 : Colors.transparent,
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Icon(
+                            i == _index ? _items[i].activeIcon : _items[i].icon,
+                            size: 21,
+                            color: i == _index ? Tw.indigo600 : Tw.slate500,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            _items[i].label,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight:
+                                  i == _index
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                              color: i == _index ? Tw.indigo700 : Tw.slate500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => Directionality(
     textDirection: TextDirection.rtl,
     child: Scaffold(
-      backgroundColor: Tw.slate100,
+      backgroundColor: Tw.slate50,
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(60),
-        child: Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(bottom: BorderSide(color: Tw.slate200)),
-            boxShadow: [
-              BoxShadow(
-                color: Color(0x0a0f172a),
-                blurRadius: 2,
-                offset: Offset(0, 1),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            bottom: false,
-            child: SizedBox(
-              height: 60,
-              child: Row(
-                children: [
-                  const SizedBox(width: 16),
-                  // App logo (docs/brand).
-                  Image.asset(
-                    'assets/brand/logo.png',
-                    width: 38,
-                    height: 38,
-                    filterQuality: FilterQuality.medium,
-                  ),
-                  Expanded(child: _title(context)),
-                  const SizedBox(width: 52),
-                ],
-              ),
-            ),
-          ),
-        ),
+        preferredSize: const Size.fromHeight(56),
+        child: _topBar(context),
       ),
       body: IndexedStack(
         index: _index,
         children: [
-          const SheetPage(),
+          SheetPage(key: _periods, onAudit: _auditPeriod),
           PayrollPage(
+            key: _audit,
             active: _index == AppTabs.payroll,
             onOpenSheet: () => goTo(AppTabs.sheet),
             onOpenSettings: () => goTo(AppTabs.settings),
@@ -307,60 +409,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           const SettingsPage(),
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Tw.slate200)),
-          boxShadow: [
-            BoxShadow(
-              color: Color(0x0d000000),
-              blurRadius: 10,
-              offset: Offset(0, -2),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          top: false,
-          child: SizedBox(
-            height: 64,
-            child: Row(
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  Expanded(
-                    child: InkWell(
-                      onTap: () => goTo(i),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          FaIcon(
-                            _items[i].icon,
-                            size: 18,
-                            color: i == _index ? Tw.indigo600 : Tw.slate400,
-                          ),
-                          const SizedBox(height: 4),
-                          // Five tabs: long labels shrink to fit.
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              _items[i].label,
-                              maxLines: 1,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: i == _index ? Tw.indigo600 : Tw.slate400,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      bottomNavigationBar: _bottomNav(),
     ),
   );
 }

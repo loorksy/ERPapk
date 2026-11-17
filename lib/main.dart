@@ -25,7 +25,7 @@ class _AuditApplicationState extends State<AuditApplication> {
   late final Future<AppHost> _host = AppHost.open();
 
   MaterialApp _app(Widget home) => MaterialApp(
-    title: 'تدقيق لورك',
+    title: 'المدقق',
     debugShowCheckedModeBanner: false,
     locale: const Locale('ar'),
     supportedLocales: const [Locale('ar')],

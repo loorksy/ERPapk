@@ -63,7 +63,7 @@ Future<bool> enqueueAuditWorker({bool now = false}) async {
       backoffPolicy: BackoffPolicy.linear,
       backoffPolicyDelay: const Duration(seconds: 30),
       foregroundServiceConfig: ForegroundServiceConfig(
-        notificationTitle: 'تدقيق لورك',
+        notificationTitle: 'المدقق',
         notificationText: 'جاري تنفيذ التدقيق على Google Sheets…',
         notificationChannelId: 'lork_audit_jobs',
         notificationChannelName: 'التدقيق',

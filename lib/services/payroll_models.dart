@@ -3,7 +3,7 @@ import '../erp/payroll_audit_engine.dart';
 
 typedef Progress = void Function(String message);
 
-/// Where the user-info table ("جدول معلومات المستخدمين") comes from.
+/// Where the user-info table ("جدول بيانات المستخدمين") comes from.
 sealed class UserInfoSource {
   const UserInfoSource();
 }
@@ -369,8 +369,8 @@ abstract final class JobKind {
 
   static String title(String kind) => switch (kind) {
     unmentionedUsers => 'تدقيق غير المذكورين',
-    unmentionedMgmt => 'سحب صفوف الإدارة غير الملوّنة',
-    adjustments => 'معالجة الإضافات والخصومات',
+    unmentionedMgmt => 'نقل سجلات الإدارة غير الملوّنة',
+    adjustments => 'تطبيق التسويات',
     _ => 'التدقيق',
   };
 }

@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../services/payroll_service.dart';
 import 'erp_theme.dart';
@@ -95,8 +94,8 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     alignment: Alignment.center,
-                    child: const FaIcon(
-                      FontAwesomeIcons.userClock,
+                    child: const Icon(
+                      Icons.pending_actions_outlined,
                       size: 15,
                       color: Tw.amber700,
                     ),
@@ -104,7 +103,7 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Text(
-                      'غير المدققين في ورقة الوكيل',
+                      'السجلات غير المدققة في جدول الوكيل',
                       style: TextStyle(
                         fontSize: 15.5,
                         fontWeight: FontWeight.w700,
@@ -114,11 +113,7 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const FaIcon(
-                      FontAwesomeIcons.xmark,
-                      size: 18,
-                      color: Tw.slate500,
-                    ),
+                    icon: const Icon(Icons.close, size: 18, color: Tw.slate500),
                   ),
                 ],
               ),
@@ -255,7 +250,7 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                         Expanded(
                           child: ErpButton(
                             label: 'نسخ الكل',
-                            icon: FontAwesomeIcons.copy,
+                            icon: Icons.content_copy_outlined,
                             height: 42,
                             fontSize: 12.5,
                             onPressed: () => _copy(idsOnly: false),
@@ -265,7 +260,7 @@ class _UnauditedDialogState extends State<_UnauditedDialog> {
                         Expanded(
                           child: ErpButton(
                             label: 'نسخ الأرقام فقط',
-                            icon: FontAwesomeIcons.hashtag,
+                            icon: Icons.tag,
                             kind: ErpButtonKind.outline,
                             height: 42,
                             fontSize: 12.5,

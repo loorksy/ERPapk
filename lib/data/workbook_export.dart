@@ -40,7 +40,7 @@ class WorkbookExport {
     final uiName = state.userInfoSheetName;
     final userInfo = sheet(
       uiName == null || uiName.isEmpty || uiName == 'CSV'
-          ? 'معلومات المستخدمين'
+          ? 'بيانات المستخدمين'
           : uiName,
     );
     for (final row in state.userInfoRows ?? const <List<Object?>>[]) {

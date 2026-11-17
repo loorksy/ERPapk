@@ -75,129 +75,147 @@ class _SettingsPageState extends State<SettingsPage> {
     showToast(context, 'تم فصل حساب Google', ToastType.success);
   }
 
+  Future<void> _openMapping() => Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => const ColumnsPage()));
+
+  void _about() => showInfo(
+    context,
+    'المدقق تطبيق لتدقيق كشوف الرواتب على الهاتف: يطابق كل مستخدم برقمه بين بيانات المستخدمين وجدولي الإدارة والوكيل («سحب وكالة» و«سحب وكالة - راتبيين» و«سحب إدارة» و«غير موجود»)، ويحسب الراتب بعد الخصم، وينسخ السجلات إلى أوراق الوكالات ويلوّنها. يطبّق أيضًا تسويات الرواتب (الإضافات والخصومات) مع المقاصة.\n\nكل الحساب يتم على الهاتف، وتُحفظ الفترات وحالات التدقيق في قاعدة بيانات على الجهاز. بدون ربط Google يمكن التدقيق من ملفات Excel أو CSV وتصدير النتائج إلى Excel.\n\nالتطبيق أداة تدقيق ومطابقة تشغيلية، وليس تدقيقًا ماليًا معتمدًا أو فحص امتثال تنظيمي.\n\nالإصدار $appVersion',
+    title: 'حول المدقق',
+  );
+
   @override
   Widget build(BuildContext context) {
-    final auth = AppScope.of(context).auth;
+    final services = AppScope.of(context);
+    final auth = services.auth;
     final connected = auth.isConnected;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
+      padding: Ds.pagePadding,
       children: [
-        Panel(
-          title: 'Google Sheets',
-          icon: FontAwesomeIcons.google,
-          iconColor: Tw.emerald600,
-          iconBg: Tw.emerald50,
-          info:
-              'يتصل الهاتف بحساب Google مباشرة دون خادم. يُستخدم الحساب لقراءة جداول الإدارة والوكيل ومعلومات المستخدمين، ولكتابة نتائج التدقيق (نسخ الصفوف إلى أوراق الوجهة، عمود الراتب والحالة، وتلوين الصفوف) والإضافات والخصومات. الحساب مشترك بين كل مساحات العمل.',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: connected ? Tw.emerald500 : Tw.slate300,
-                      shape: BoxShape.circle,
-                    ),
+        const SectionLabel('الربط والمزامنة', icon: Icons.link),
+        GroupList(
+          children: [
+            ListRow(
+              title: 'Google Sheets',
+              leading: const SizedBox(
+                width: 32,
+                child: Center(
+                  child: FaIcon(
+                    FontAwesomeIcons.google,
+                    size: 18,
+                    color: Tw.slate700,
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
+                ),
+              ),
+              subtitle: Row(
+                children: [
+                  ColorDot(connected ? Tw.emerald500 : Tw.slate300, size: 8),
+                  const SizedBox(width: 6),
+                  Flexible(
                     child: Text(
-                      connected ? 'متصل: ${auth.email ?? ''}' : 'غير متصل',
+                      connected ? 'متصل · ${auth.email ?? ''}' : 'غير متصل',
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: connected ? Tw.emerald700 : Tw.slate600,
+                        color: connected ? Tw.emerald700 : Tw.slate500,
                       ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              connected
-                  ? ErpButton(
-                    label: 'فصل الحساب',
-                    icon: FontAwesomeIcons.linkSlash,
-                    kind: ErpButtonKind.outline,
-                    height: 42,
-                    loading: _busy,
-                    onPressed: _disconnect,
-                  )
-                  : ErpButton(
-                    label: 'ربط حساب Google',
-                    icon: FontAwesomeIcons.google,
-                    kind: ErpButtonKind.indigo,
-                    loading: _busy,
-                    loadingLabel: 'جاري الربط...',
-                    onPressed: _connect,
-                  ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10),
-                child: Divider(height: 1, color: Tw.slate100),
-              ),
-              Row(
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'المزامنة التلقائية للدورات',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Tw.slate800,
+                  _busy
+                      ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                      : TextButton(
+                        onPressed: connected ? _disconnect : _connect,
+                        style: TextButton.styleFrom(
+                          foregroundColor:
+                              connected ? Tw.slate600 : Tw.indigo600,
+                        ),
+                        child: Text(connected ? 'فصل' : 'ربط'),
                       ),
+                  const InfoTip(
+                    'يتصل الهاتف بحساب Google مباشرة دون خادم. يُستخدم الحساب لقراءة جداول الإدارة والوكيل وبيانات المستخدمين، ولكتابة نتائج التدقيق (النسخ إلى أوراق الوكالات، الراتب والحالة، التلوين) وتسويات الرواتب. الحساب مشترك بين كل مساحات العمل.',
+                    title: 'Google Sheets',
+                  ),
+                ],
+              ),
+            ),
+            ListRow(
+              title: 'المزامنة التلقائية',
+              leading: const SizedBox(
+                width: 32,
+                child: Icon(Icons.sync, size: 21, color: Tw.slate600),
+              ),
+              subtitle: const Text('كل دقيقتين أثناء فتح التطبيق'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Transform.scale(
+                    scale: 0.85,
+                    child: Switch(
+                      value: _syncEnabled ?? false,
+                      onChanged: _syncEnabled == null ? null : _toggleSync,
                     ),
                   ),
                   const InfoTip(
-                    'كما في النظام: كل دقيقتين تُحدَّث لقطات الدورات المرتبطة بـ Google وحالة التدقيق اليدوي (الصفوف الملوّنة) للبحث، أثناء فتح التطبيق.',
+                    'كما في النظام: كل دقيقتين تُحدَّث لقطات الفترات المرتبطة بـ Google وحالة التدقيق اليدوي (السجلات الملوّنة) للاستعلام، أثناء فتح التطبيق.',
                     title: 'المزامنة التلقائية',
-                  ),
-                  Switch(
-                    value: _syncEnabled ?? false,
-                    activeTrackColor: Tw.indigo600,
-                    onChanged: _syncEnabled == null ? null : _toggleSync,
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-        gap,
+        const SizedBox(height: 12),
         const WorkspacesCard(),
-        gap,
-        const ColumnsCard(),
-        gap,
-        Panel(
-          child: Row(
-            children: [
-              Image.asset('assets/brand/logo.png', width: 40, height: 40),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'تدقيق لورك',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: Tw.slate800,
-                      ),
-                    ),
-                    Text(
-                      'الإصدار $appVersion',
-                      style: TextStyle(fontSize: 12, color: Tw.slate500),
-                    ),
-                  ],
+        const SizedBox(height: 12),
+        const SectionLabel('البيانات', icon: Icons.view_column_outlined),
+        GroupList(
+          children: [
+            ListRow(
+              title: 'ربط حقول البيانات',
+              leading: const SizedBox(
+                width: 32,
+                child: Icon(
+                  Icons.view_column_outlined,
+                  size: 21,
+                  color: Tw.slate600,
                 ),
               ),
-              const InfoTip(
-                'منطق التدقيق هو نفسه في النظام: المطابقة برقم المستخدم، «سحب وكالة» و«سحب وكالة - راتبيين» و«سحب إدارة» و«غير موجود»، الراتب بعد الخصم، والألوان. كل الحساب يتم على الهاتف وتُحفظ الدورات وحالات التدقيق في قاعدة بيانات على الجهاز.\n\nبدون ربط Google يمكن التدقيق من ملفات Excel أو CSV وتصدير النتائج إلى ملف Excel.',
-                title: 'التدقيق على الهاتف',
+              subtitle: const Text(
+                'أعمدة الإدارة والوكيل وبيانات المستخدمين وغير المذكورين',
               ),
-            ],
-          ),
+              trailing: const RowChevron(),
+              onTap: _openMapping,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const SectionLabel('التطبيق', icon: Icons.info_outline),
+        GroupList(
+          children: [
+            ListRow(
+              title: 'حول المدقق',
+              leading: Image.asset(
+                'assets/brand/logo.png',
+                width: 32,
+                height: 32,
+              ),
+              subtitle: const Text('الإصدار $appVersion'),
+              trailing: const RowChevron(),
+              onTap: _about,
+            ),
+          ],
         ),
       ],
     );

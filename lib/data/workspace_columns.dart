@@ -143,7 +143,7 @@ class WorkspaceColumns {
   /// in the wrong place, or null.
   String? validate() {
     if (userInfoUserIdCol == userInfoTitleCol) {
-      return 'عمود رقم المستخدم وعمود اسم الورقة في جدول معلومات المستخدمين يجب أن يكونا مختلفين.';
+      return 'عمود رقم المستخدم وعمود اسم الورقة في جدول بيانات المستخدمين يجب أن يكونا مختلفين.';
     }
     final status =
         userInfoStatusCol.isEmpty
