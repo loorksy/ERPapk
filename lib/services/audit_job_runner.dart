@@ -12,6 +12,7 @@ class _Transient implements Exception {
 }
 
 /// Runs Google audits as resumable jobs (owner's request, 2026-11-17).
+/// The «غير مذكور» tools ([JobKind]) run the same way.
 ///
 /// A job follows ERP `payrollRunAudit`: 1/2 sync the cycle and the
 /// user-info sheet, 2/2 `payroll-execute`. The writes are saved as a plan
@@ -75,6 +76,8 @@ class AuditJobRunner {
   /// wait and be retried later.
   Future<bool> runJob(AuditJob job) async {
     final request = PayrollRequest.fromJson(job.request);
+    final kind = JobKind.of(job.request);
+    final options = UnmentionedOptions.fromJson(job.request['unmentioned']);
     AuditPlan? plan;
     final saved = await db.getAuditJobPlan(job.id);
     if (saved != null) {
@@ -111,7 +114,19 @@ class AuditJobRunner {
                 ? sync.message
                 : '${sync.message} — ${sync.detail}',
           );
-          final prepared = await payroll.prepareGoogle(request, progress);
+          final prepared = switch (kind) {
+            JobKind.unmentionedUsers => await payroll.prepareUnmentionedUsers(
+              request,
+              options,
+              progress,
+            ),
+            JobKind.unmentionedMgmt => await payroll.prepareUnmentionedMgmt(
+              request,
+              options,
+              progress,
+            ),
+            _ => await payroll.prepareGoogle(request, progress),
+          };
           final p = prepared.plan;
           if (p == null) return await _fail(job.id, prepared.failure!);
           plan = p;

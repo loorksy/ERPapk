@@ -141,12 +141,7 @@ class PayrollService {
     final meta = await withSheetsRetry(
       () => sheets.getSpreadsheet(spreadsheetId),
     );
-    final firstSheet = meta.sheets.isEmpty ? null : meta.sheets.first;
-    final requestedTitle = ui.sheetName?.trim() ?? '';
-    final mainSheetTitle =
-        requestedTitle.isNotEmpty
-            ? requestedTitle
-            : (firstSheet?.title ?? 'Sheet1');
+    final mainSheetTitle = userInfoSheetTitle(meta, ui);
     // ERP reads 'title'!A:ZZ in one request; reading in batches gives the
     // same rows and works for sheets of any size.
     final allRows = await fetchSheetValuesBatched(
@@ -291,6 +286,15 @@ class PayrollService {
     );
   }
 
+  /// ERP: the chosen user-info sheet, or the first sheet.
+  static String userInfoSheetTitle(SpreadsheetMeta meta, GoogleUserInfo ui) {
+    final firstSheet = meta.sheets.isEmpty ? null : meta.sheets.first;
+    final requestedTitle = ui.sheetName?.trim() ?? '';
+    return requestedTitle.isNotEmpty
+        ? requestedTitle
+        : (firstSheet?.title ?? 'Sheet1');
+  }
+
   /// Human-readable label of a step, for the progress line.
   static String describeStep(Map<String, Object?> step) {
     switch (step['k']) {
@@ -308,7 +312,11 @@ class PayrollService {
         return step['sheetOf'] == 'management'
             ? '2/2 تلوين $n صف في ورقة الإدارة...'
             : '2/2 تلوين $n صف في ورقة الوكيل...';
+      case 'appendUserInfo':
+        final n = (step['rows'] as List).length;
+        return '2/2 إضافة $n رقم إلى جدول معلومات المستخدمين...';
       case 'finish':
+      case 'finishMerge':
         return '2/2 حفظ النتائج...';
     }
     return '2/2 تطبيق...';
@@ -321,6 +329,14 @@ class PayrollService {
     final kind = step['k'];
     if (kind == 'finish') {
       await _finishPlan(plan);
+      return;
+    }
+    if (kind == 'finishMerge') {
+      await _finishMerge(plan);
+      return;
+    }
+    if (kind == 'appendUserInfo') {
+      await _appendUserInfoStep(step);
       return;
     }
     // Light record (links and sheet names); the data only where needed.
@@ -720,10 +736,512 @@ class PayrollService {
   }
 
   // ======================================================================
+  // «غير مذكور» tools (owner's request, 2026-11-17)
+  // ======================================================================
+
+  /// Step 1 of the owner's «غير مذكور» flow: user ids of the agent sheet
+  /// that are not in the user-info sheet are added to it, one row per id
+  /// (an id with several agent rows has several salaries but one user),
+  /// right after its last row: the id in the audit's id column and in
+  /// [UnmentionedOptions.idCols] (A), the label in the title column (D) and
+  /// in [UnmentionedOptions.labelCols] (E). Those rows are then audited
+  /// with the same logic as the bulk audit — the title column sends the
+  /// copies to the sheet «غير مذكور» of the management spreadsheet — and
+  /// only those rows are written (copies, salary and status, colours).
+  Future<PreparedAudit> prepareUnmentionedUsers(
+    PayrollRequest req,
+    UnmentionedOptions opts,
+    Progress progress,
+  ) async {
+    final ui = req.userInfo as GoogleUserInfo;
+    final cycle = await db.getCycle(req.cycleId);
+    if (cycle == null) {
+      return PreparedAudit.fail(
+        PayrollResult.fail('الدورة المالية غير موجودة'),
+      );
+    }
+    if (!cycle.linkedToGoogle) {
+      return PreparedAudit.fail(
+        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
+      );
+    }
+    final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
+    final colTitle = columnLetterToIndex(req.columns.userInfoTitleCol) ?? 3;
+    if (colId == colTitle) {
+      return PreparedAudit.fail(
+        PayrollResult.fail(
+          'عمود رقم المستخدم وعمود اسم الورقة يجب أن يكونا مختلفين.',
+        ),
+      );
+    }
+    final sheets = sheetsProvider();
+    progress('1/2 قراءة جدول معلومات المستخدمين...');
+    final meta = await withSheetsRetry(
+      () => sheets.getSpreadsheet(ui.spreadsheetId),
+    );
+    final title = userInfoSheetTitle(meta, ui);
+    final allRows = await fetchSheetValuesBatched(
+      sheets,
+      ui.spreadsheetId,
+      title,
+      rowCount: sheetRowCount(meta, title),
+    );
+    final present = <String>{
+      for (final r in allRows) normalizeUserId(cellAt(r, colId)),
+    };
+
+    final agentCol = columnLetterToIndex(req.columns.cycleAgentUserIdCol) ?? 0;
+    final agentRows = cycle.agentRows;
+    final start =
+        agentRows.isNotEmpty && isHeaderRowCycle(agentRows[0], agentCol)
+            ? 1
+            : 0;
+    final missing = <String>[];
+    final seen = <String>{};
+    for (var i = start; i < agentRows.length; i++) {
+      final id = normalizeUserId(cellAt(agentRows[i], agentCol));
+      if (id.isEmpty || present.contains(id) || !seen.add(id)) continue;
+      missing.add(id);
+    }
+    if (missing.isEmpty) {
+      return PreparedAudit.plan(
+        AuditPlan(
+          cycleId: cycle.id,
+          steps: const [],
+          next: 0,
+          result: PayrollResult(
+            success: true,
+            message:
+                'لا يوجد مستخدمون غير مذكورين: كل أرقام ورقة الوكيل موجودة في جدول معلومات المستخدمين.',
+            spreadsheetUrl: meta.url,
+          ),
+          finish: const {},
+        ),
+      );
+    }
+
+    // The new rows: labels first, then the ids (the id and title columns
+    // always hold the id and the label).
+    Set<int> indices(int first, List<String> letters) => {
+      first,
+      for (final c in letters)
+        if (columnLetterToIndex(c) != null) columnLetterToIndex(c)!,
+    };
+    final idCols = indices(colId, opts.idCols);
+    final labelCols = indices(colTitle, opts.labelCols)..removeAll(idCols);
+    final width = [...idCols, ...labelCols].reduce((a, b) => a > b ? a : b) + 1;
+    final newRows = <List<String>>[
+      for (final id in missing)
+        [
+          for (var c = 0; c < width; c++)
+            idCols.contains(c) ? id : (labelCols.contains(c) ? opts.label : ''),
+        ],
+    ];
+    final firstNew = allRows.length + 1;
+
+    final settings = await db.getPayrollSettings();
+    final out = runPayrollAuditCore(
+      managementRows: cycle.managementRows,
+      agentRows: agentRows,
+      userInfoRows: [...allRows, ...newRows],
+      columns: req.columns,
+      discountRatePct: resolveDiscount(req.discountRate, settings),
+      agentColor: req.agentColor,
+      managementColor: req.managementColor,
+    );
+    final grouped = groupByTitle(out, {
+      for (final r in out.results)
+        if (r.rowIndex < firstNew) r.rowIndex,
+    });
+
+    final steps = <Map<String, Object?>>[
+      {
+        'k': 'appendUserInfo',
+        'ss': ui.spreadsheetId,
+        'sheet': title,
+        'startRow': firstNew,
+        'idCol': colId,
+        'rows': newRows,
+      },
+    ];
+    final auditedMemberIds = await db.auditedMemberIds(cycle.id);
+    final copies = <Map<String, Object?>>[];
+    final usedNames = <String>{};
+    for (final t in grouped.order) {
+      var sheetName = safeSheetTitle(t);
+      while (usedNames.contains(sheetName)) {
+        sheetName = '${sheetName}_${usedNames.length}';
+      }
+      usedNames.add(sheetName);
+      final seenInBatch = <String>{};
+      final rows = <List<String>>[
+        for (final it in grouped.byTitle[t]!)
+          if (_copyable(it, out.cycleMgmtCol, auditedMemberIds, seenInBatch))
+            it.managementRow,
+      ];
+      if (rows.isEmpty) continue;
+      copies.add({
+        'k': 'copy',
+        'sheet': sheetName,
+        'idCol': out.cycleMgmtCol,
+        'rows': rows,
+      });
+    }
+    if (copies.isNotEmpty) {
+      steps.add({
+        'k': 'addSheets',
+        'names': [for (final c in copies) c['sheet']],
+      });
+      steps.addAll(copies);
+    }
+    final writes = salaryStatusColumns(req, out, const [], firstNew);
+    if (writes.salaryValues.isNotEmpty) {
+      final t = escapeSheetTitleForRange(title);
+      for (final (what, col, values) in [
+        ('الراتب', writes.salaryColLetter, writes.salaryValues),
+        ('الحالة', writes.statusColLetter, writes.statusValues),
+      ]) {
+        steps.add({
+          'k': 'values',
+          'what': what,
+          'ss': ui.spreadsheetId,
+          'range': "'$t'!$col${writes.minRow}:$col${writes.maxRow}",
+          'values': values,
+        });
+      }
+    }
+    final colors = sourceColors(out, fromRow: firstNew);
+    for (final (of, rows) in [
+      ('management', colors.mgmt),
+      ('agent', colors.agent),
+    ]) {
+      if (rows.isEmpty) continue;
+      steps.add({
+        'k': 'color',
+        'sheetOf': of,
+        'rows': {for (final e in rows.entries) '${e.key}': e.value},
+      });
+    }
+    steps.add({'k': 'finishMerge'});
+
+    final added = [
+      for (final r in out.results)
+        if (r.rowIndex >= firstNew) r,
+    ];
+    final summary = AuditSummary(
+      total: added.length,
+      agent: added.where((r) => isAgentType(r.type)).length,
+      management: added.where((r) => r.type == typeManagement).length,
+      notFound: added.where((r) => r.type == typeNotFound).length,
+    );
+    final last = firstNew + missing.length - 1;
+    return PreparedAudit.plan(
+      AuditPlan(
+        cycleId: cycle.id,
+        steps: steps,
+        next: 0,
+        result: PayrollResult(
+          success: true,
+          message:
+              'أُضيف ${missing.length} رقم من ورقة الوكيل إلى جدول معلومات المستخدمين (${firstNew == last ? 'الصف $firstNew' : 'الصفوف $firstNew–$last'}) بعنوان «${opts.label}» ودُققت',
+          summary: summary,
+          applied: true,
+          spreadsheetUrl: meta.url,
+          results: added,
+        ),
+        finish: {
+          ...finishData(out, '', fromRow: firstNew),
+          'mode': 'google-unmentioned-users',
+        },
+      ),
+    );
+  }
+
+  static bool _copyable(
+    TitleItem it,
+    int idCol,
+    Set<String> audited,
+    Set<String> seenInBatch,
+  ) {
+    final id = normalizeUserId(cellAt(it.managementRow, idCol));
+    if (id.isEmpty || audited.contains(id)) return false;
+    return seenInBatch.add(id);
+  }
+
+  /// Step 2 of the owner's «غير مذكور» flow: management rows that are not
+  /// coloured and not audited, whose user is not in the user-info sheet and
+  /// whose sub-agent column (W) holds a non-zero amount, are copied to the
+  /// sheet «غير مذكور» of the management spreadsheet (created if missing)
+  /// and coloured with the management colour, so they are not pulled twice.
+  Future<PreparedAudit> prepareUnmentionedMgmt(
+    PayrollRequest req,
+    UnmentionedOptions opts,
+    Progress progress,
+  ) async {
+    final ui = req.userInfo as GoogleUserInfo;
+    final cycle = await db.getCycle(req.cycleId);
+    if (cycle == null) {
+      return PreparedAudit.fail(
+        PayrollResult.fail('الدورة المالية غير موجودة'),
+      );
+    }
+    final mgmtSsId = cycle.managementSpreadsheetId;
+    if (!cycle.linkedToGoogle || mgmtSsId == null) {
+      return PreparedAudit.fail(
+        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
+      );
+    }
+    final sheets = sheetsProvider();
+    final mgmtRows = cycle.managementRows;
+    final idCol = columnLetterToIndex(req.columns.cycleMgmtUserIdCol) ?? 0;
+    final shareCol = columnLetterToIndex(opts.shareCol) ?? 22;
+
+    progress('1/2 قراءة ألوان ورقة الإدارة...');
+    final mgmtMeta = await withSheetsRetry(
+      () => sheets.getSpreadsheet(mgmtSsId),
+    );
+    final mgmtTitle =
+        cycle.managementSheetName ??
+        (mgmtMeta.sheets.isEmpty ? 'Sheet1' : mgmtMeta.sheets.first.title);
+    final backgrounds = await withSheetsRetry(
+      () => sheets.columnBackgrounds(
+        mgmtSsId,
+        mgmtTitle,
+        columnIndexToLetter(idCol),
+        mgmtRows.length,
+      ),
+    );
+
+    progress('1/2 قراءة جدول معلومات المستخدمين...');
+    final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
+    final uiMeta = await withSheetsRetry(
+      () => sheets.getSpreadsheet(ui.spreadsheetId),
+    );
+    final uiTitle = userInfoSheetTitle(uiMeta, ui);
+    final uiRows = await fetchSheetValuesBatched(
+      sheets,
+      ui.spreadsheetId,
+      uiTitle,
+      rowCount: sheetRowCount(uiMeta, uiTitle),
+    );
+    final mentioned = <String>{
+      for (final r in uiRows) normalizeUserId(cellAt(r, colId)),
+    };
+    final audited = {
+      ...await db.auditedMemberIds(cycle.id),
+      ...await db.cacheAuditedIds(cycle.id),
+    };
+
+    final start =
+        mgmtRows.isNotEmpty && isHeaderRowCycle(mgmtRows[0], idCol) ? 1 : 0;
+    final rows = <List<String>>[];
+    final rowIndices = <int>[];
+    final seen = <String>{};
+    for (var i = start; i < mgmtRows.length; i++) {
+      final row = mgmtRows[i];
+      final id = normalizeUserId(cellAt(row, idCol));
+      if (id.isEmpty) continue;
+      if (i < backgrounds.length && isColoredBackground(backgrounds[i])) {
+        continue;
+      }
+      if (mentioned.contains(id) || audited.contains(id)) continue;
+      final share = parseAmount(cellAt(row, shareCol));
+      if (share == null || share == 0) continue;
+      if (!seen.add(id)) continue;
+      rows.add(row);
+      rowIndices.add(i);
+    }
+    final sheetName = safeSheetTitle(opts.label);
+    if (rows.isEmpty) {
+      return PreparedAudit.plan(
+        AuditPlan(
+          cycleId: cycle.id,
+          steps: const [],
+          next: 0,
+          result: PayrollResult(
+            success: true,
+            message:
+                'لا توجد صفوف غير ملوّنة في ورقة الإدارة فيها مبلغ في العمود ${opts.shareCol}.',
+            spreadsheetUrl: mgmtMeta.url,
+          ),
+          finish: const {},
+        ),
+      );
+    }
+    final steps = <Map<String, Object?>>[
+      {
+        'k': 'addSheets',
+        'names': [sheetName],
+      },
+      {'k': 'copy', 'sheet': sheetName, 'idCol': idCol, 'rows': rows},
+      {
+        'k': 'color',
+        'sheetOf': 'management',
+        'rows': {for (final i in rowIndices) '$i': req.managementColor},
+      },
+      {'k': 'finishMerge'},
+    ];
+    final results = [
+      for (var j = 0; j < rows.length; j++)
+        AuditResultRow(
+          userId: normalizeUserId(cellAt(rows[j], idCol)),
+          title: opts.label,
+          type: opts.label,
+          managementRow: rows[j],
+          mgmtSheetRowIndex: rowIndices[j],
+          agentSheetRowIndices: const [],
+          salaryValue: null,
+          statusLabel: '',
+          rowIndex: rowIndices[j] + 1,
+        ),
+    ];
+    return PreparedAudit.plan(
+      AuditPlan(
+        cycleId: cycle.id,
+        steps: steps,
+        next: 0,
+        result: PayrollResult(
+          success: true,
+          message:
+              'نُقل ${rows.length} صف من ورقة الإدارة إلى ورقة «$sheetName» ولُوّنت بلون الإدارة',
+          applied: true,
+          spreadsheetUrl: mgmtMeta.url,
+          results: results,
+        ),
+        finish: {
+          'entries': [
+            for (final r in results)
+              {
+                'id': r.userId,
+                'source': 'نُقل إلى «$sheetName» من ورقة الإدارة',
+                'details': {'type': opts.label, 'title': sheetName},
+              },
+          ],
+          'agent': const <String>[],
+          'mgmt': [for (final r in results) r.userId],
+          'mode': 'google-unmentioned-mgmt',
+        },
+      ),
+    );
+  }
+
+  /// A sheet amount as a number: Arabic or Persian digits, the Arabic
+  /// decimal sign (٫) and thousands separators are accepted. Null when the
+  /// cell is empty or not a number.
+  static double? parseAmount(String? value) {
+    final s = normalizeForNumber(value?.replaceAll('٫', '.'));
+    if (s.isEmpty) return null;
+    final n = jsParseFloat(s);
+    return jsIsFiniteNumber(n) ? n : null;
+  }
+
+  /// Writes the rows added by «تدقيق غير المذكورين» right after the last
+  /// row of the user-info sheet (positions fixed when the job was
+  /// prepared). Repeating it rewrites the same cells; if somebody else
+  /// wrote in those rows meanwhile, it stops instead of overwriting them.
+  Future<void> _appendUserInfoStep(Map<String, Object?> step) async {
+    final sheets = sheetsProvider();
+    final ss = step['ss'] as String;
+    final title = step['sheet'] as String;
+    final startRow = (step['startRow'] as num).toInt();
+    final idCol = (step['idCol'] as num).toInt();
+    final rows = [for (final r in (step['rows'] as List)) _strings(r)];
+    final endRow = startRow + rows.length - 1;
+    final current = await withSheetsRetry(
+      () => sheets.valuesGet(ss, rangeA1ZZ(title, startRow, endRow)),
+    );
+    for (var i = 0; i < current.length && i < rows.length; i++) {
+      if (current[i].every((c) => c.trim().isEmpty)) continue;
+      final id = normalizeUserId(cellAt(current[i], idCol));
+      if (id != normalizeUserId(cellAt(rows[i], idCol))) {
+        throw Exception(
+          'تغيّر جدول معلومات المستخدمين بعد بدء العملية (توجد بيانات أخرى في الصف ${startRow + i}). لم يُكتب شيء فوقها؛ أعد تشغيل «تدقيق غير المذكورين».',
+        );
+      }
+    }
+    final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ss));
+    SheetProps? props;
+    for (final s in meta.sheets) {
+      if (s.title == title) props = s;
+    }
+    if (props == null) {
+      throw Exception('الورقة «$title» غير موجودة في جدول معلومات المستخدمين.');
+    }
+    final gridRows = props.rowCount;
+    if (gridRows != null && gridRows < endRow) {
+      await withSheetsRetry(
+        () => sheets.batchUpdate(ss, [
+          {
+            'appendDimension': {
+              'sheetId': props!.sheetId,
+              'dimension': 'ROWS',
+              'length': endRow - gridRows,
+            },
+          },
+        ]),
+      );
+    }
+    for (var i = 0; i < rows.length; i += copyChunkRows) {
+      final end =
+          i + copyChunkRows > rows.length ? rows.length : i + copyChunkRows;
+      await withSheetsRetry(
+        () => sheets.valuesUpdate(
+          ss,
+          "'${escapeSheetTitleForRange(title)}'!A${startRow + i}",
+          rows.sublist(i, end),
+        ),
+      );
+    }
+  }
+
+  /// Saves the outcome of a «غير مذكور» job: statuses of its users and the
+  /// search cache, added to what earlier audits saved (the bulk audit's
+  /// `_finishPlan` replaces them). The bulk audit's hash is left alone.
+  Future<void> _finishMerge(AuditPlan plan) async {
+    final cycle = await db.getCycle(plan.cycleId);
+    if (cycle == null) return;
+    final f = plan.finish;
+    await db.saveUserAuditStatuses(cycle.id, [
+      for (final e in (f['entries'] as List? ?? const []))
+        AuditEntry(
+          (e as Map)['id'].toString(),
+          'مدقق',
+          e['source'] as String?,
+          Map<String, Object?>.from(e['details'] as Map),
+        ),
+    ]);
+    final cache = await db.getCycleCache(cycle.id);
+    await db.saveCycleCache(
+      cycle.id,
+      CycleCache(
+        managementData: cycle.managementRows,
+        agentData: cycle.agentRows,
+        managementSheetName: cycle.managementSheetName,
+        agentSheetName: cycle.agentSheetName,
+        auditedAgentIds: {
+          ...?cache?.auditedAgentIds,
+          for (final x in (f['agent'] as List? ?? const [])) x.toString(),
+        },
+        auditedMgmtIds: {
+          ...?cache?.auditedMgmtIds,
+          for (final x in (f['mgmt'] as List? ?? const [])) x.toString(),
+        },
+        foundInTargetSheetIds: cache?.foundInTargetSheetIds ?? <String>{},
+      ),
+    );
+    await db.addAuditRun(
+      cycle.id,
+      (f['mode'] as String?) ?? 'google',
+      plan.result.toLog(),
+    );
+  }
+
+  // ======================================================================
   // Agent-sheet users not audited yet (owner's request, read only)
   // ======================================================================
 
-  /// Agent name column requested by the owner (column C).
+  /// Agent name column requested by the owner (column C by default; a
+  /// workspace setting).
   static const agentNameColumn = 2;
 
   /// Users of the cycle's agent sheet (as synced by the last audit) with no
@@ -734,6 +1252,9 @@ class PayrollService {
     if (cycle == null) return const PendingAgentMembers([], 0);
     final cols = await db.getCycleColumns(cycleId);
     final idIdx = columnLetterToIndex(cols.agentUserIdCol) ?? 0;
+    final nameIdx =
+        columnLetterToIndex((await db.getWorkspaceColumns()).agentNameCol) ??
+        agentNameColumn;
     final rows = cycle.agentRows;
     final start = rows.isNotEmpty && isHeaderRowCycle(rows[0], idIdx) ? 1 : 0;
     final audited = {
@@ -746,11 +1267,7 @@ class PayrollService {
       final id = normalizeUserId(cellAt(rows[i], idIdx));
       if (id.isEmpty || !seen.add(id) || audited.contains(id)) continue;
       members.add(
-        PendingMember(
-          id,
-          (cellAt(rows[i], agentNameColumn) ?? '').trim(),
-          i + 1,
-        ),
+        PendingMember(id, (cellAt(rows[i], nameIdx) ?? '').trim(), i + 1),
       );
     }
     return PendingAgentMembers(members, seen.length);
@@ -808,10 +1325,13 @@ class PayrollService {
     return (byTitle: byTitle, order: jsObjectKeyOrder(insertion));
   }
 
+  /// [fromRow]: write only rows from this one on (the rows added by
+  /// «تدقيق غير المذكورين»).
   ColumnWrites salaryStatusColumns(
     PayrollRequest req,
     AuditCoreOutput out, [
     List<DuplicateGroup> duplicates = const [],
+    int? fromRow,
   ]) {
     final salaryText = req.columns.userInfoSalaryCol.trim();
     final salaryColLetter =
@@ -822,7 +1342,8 @@ class PayrollService {
         statusText.isNotEmpty
             ? statusText.toUpperCase()
             : columnIndexToLetter(salaryColIdx + 1);
-    final minRow = out.dataStart + 1;
+    final firstData = out.dataStart + 1;
+    final minRow = fromRow != null && fromRow > firstData ? fromRow : firstData;
     final maxRow = out.dataStart + out.dataRows.length;
     final byRowSalary = <int, Object?>{};
     final byRowStatus = <int, String>{};
@@ -864,11 +1385,13 @@ class PayrollService {
       v == v.truncateToDouble() && v.abs() < 1e15 ? v.toInt() : v;
 
   static ({Map<int, String> mgmt, Map<int, String> agent}) sourceColors(
-    AuditCoreOutput out,
-  ) {
+    AuditCoreOutput out, {
+    int? fromRow,
+  }) {
     final mgmt = <int, String>{};
     final agent = <int, String>{};
     for (final r in out.results) {
+      if (fromRow != null && r.rowIndex < fromRow) continue;
       if (isAgentType(r.type) && r.mgmtSheetRowIndex != null) {
         mgmt[r.mgmtSheetRowIndex!] = out.agentColorVal;
       } else if (r.type == typeManagement && r.mgmtSheetRowIndex != null) {
@@ -887,12 +1410,14 @@ class PayrollService {
   /// (ERP saves them at the end of payroll-execute).
   static Map<String, Object?> finishData(
     AuditCoreOutput out,
-    String userInfoHash,
-  ) {
+    String userInfoHash, {
+    int? fromRow,
+  }) {
     final auditedAgent = <String>{};
     final auditedMgmt = <String>{};
     final entries = <Map<String, Object?>>[];
     for (final r in out.results) {
+      if (fromRow != null && r.rowIndex < fromRow) continue;
       if (isAgentType(r.type) && r.userId.isNotEmpty) {
         auditedAgent.add(r.userId);
       }

@@ -22,7 +22,7 @@ class AuditApplication extends StatefulWidget {
 }
 
 class _AuditApplicationState extends State<AuditApplication> {
-  late final Future<AppServices> _services = AppServices.open();
+  late final Future<AppHost> _host = AppHost.open();
 
   MaterialApp _app(Widget home) => MaterialApp(
     title: 'تدقيق لورك',
@@ -39,8 +39,8 @@ class _AuditApplicationState extends State<AuditApplication> {
   );
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<AppServices>(
-    future: _services,
+  Widget build(BuildContext context) => FutureBuilder<AppHost>(
+    future: _host,
     builder: (context, snap) {
       if (snap.hasError) {
         return _app(
@@ -49,15 +49,28 @@ class _AuditApplicationState extends State<AuditApplication> {
           ),
         );
       }
-      final services = snap.data;
-      if (services == null) {
+      final host = snap.data;
+      if (host == null) {
         return _app(
           const Scaffold(body: Center(child: CircularProgressIndicator())),
         );
       }
-      // AppScope sits above the Navigator so dialogs and bottom sheets
-      // (new routes) can reach the database and the Google connection too.
-      return AppScope(services: services, child: _app(const AppShell()));
+      return ListenableBuilder(
+        listenable: host,
+        builder: (context, _) {
+          final services = host.active;
+          // AppScope sits above the Navigator so dialogs and bottom sheets
+          // (new routes) can reach the database and the Google connection
+          // too. Switching workspace rebuilds the app on the other database.
+          return AppScope(
+            services: services,
+            child: KeyedSubtree(
+              key: ValueKey(services.workspace.id),
+              child: _app(AppShell(initialTab: host.initialTab)),
+            ),
+          );
+        },
+      );
     },
   );
 }

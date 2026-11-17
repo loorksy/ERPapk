@@ -6,7 +6,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import '../app_services.dart';
 import 'erp_theme.dart';
+import 'columns_card.dart';
 import 'erp_widgets.dart';
+import 'workspaces_card.dart';
 
 /// Settings → Google Sheets connection (the account is linked on the phone).
 class SettingsPage extends StatefulWidget {
@@ -219,6 +221,10 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        const WorkspacesCard(),
+        const SizedBox(height: 16),
+        const ColumnsCard(),
         const SizedBox(height: 16),
         ErpCard(
           padding: const EdgeInsets.all(16),

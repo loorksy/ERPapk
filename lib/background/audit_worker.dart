@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:workmanager/workmanager.dart';
 
 import '../data/app_database.dart';
+import '../data/workspaces.dart';
 import '../google/google_auth.dart';
 import '../google/sheets_client.dart';
 import '../services/audit_job_runner.dart';
@@ -19,18 +20,25 @@ const auditWorkName = 'lork-audit-jobs';
 void auditCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     DartPluginRegistrant.ensureInitialized();
-    final db = await AppDatabase.open();
+    final registry = await WorkspaceRegistry.open();
     final auth = GoogleAuth();
     await auth.restore();
     final sheets = GoogleSheetsApi(auth);
-    final runner = AuditJobRunner(
-      db,
-      PayrollService(db, () => sheets),
-      CycleService(db, () => sheets),
-      owner: 'worker',
-    );
-    // The database stays open: the app shares the same native connection.
-    return runner.runPending();
+    // Every workspace (one database each) may have an unfinished job.
+    var finished = true;
+    for (final w in await registry.list()) {
+      // The databases stay open: the app shares the same native connection.
+      final db = await AppDatabase.open(path: registry.pathOf(w));
+      if ((await db.pendingAuditJobs()).isEmpty) continue;
+      final runner = AuditJobRunner(
+        db,
+        PayrollService(db, () => sheets),
+        CycleService(db, () => sheets),
+        owner: 'worker',
+      );
+      if (!await runner.runPending()) finished = false;
+    }
+    return finished;
   });
 }
 

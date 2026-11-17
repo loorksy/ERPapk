@@ -338,3 +338,73 @@ class PendingAgentMembers {
   /// Distinct user ids in the agent sheet.
   final int agentTotal;
 }
+
+/// Kinds of background job (the request JSON carries `kind`).
+abstract final class JobKind {
+  /// The bulk audit (ERP `payroll-execute`). Jobs saved before 2.4.0 have
+  /// no kind and are audits.
+  static const audit = 'audit';
+
+  /// Owner's request (2026-11-17): agent-sheet users missing from the
+  /// user-info sheet are added to it as «غير مذكور», then audited.
+  static const unmentionedUsers = 'unmentionedUsers';
+
+  /// Owner's request (2026-11-17): management rows not coloured (not
+  /// audited) with a value in the sub-agent column (W) are copied to the
+  /// «غير مذكور» sheet.
+  static const unmentionedMgmt = 'unmentionedMgmt';
+
+  static String of(Map<String, Object?> request) =>
+      (request['kind'] as String?) ?? audit;
+
+  static String title(String kind) => switch (kind) {
+    unmentionedUsers => 'تدقيق غير المذكورين',
+    unmentionedMgmt => 'سحب صفوف الإدارة غير الملوّنة',
+    _ => 'التدقيق',
+  };
+}
+
+/// Columns and label used by the «غير مذكور» tools (workspace settings).
+class UnmentionedOptions {
+  const UnmentionedOptions({
+    this.label = 'غير مذكور',
+    this.idCols = const ['A'],
+    this.labelCols = const ['E'],
+    this.shareCol = 'W',
+  });
+
+  /// Written in the title column (it routes the copy to the sheet of the
+  /// same name in the management spreadsheet) and in [labelCols].
+  final String label;
+
+  /// User-info columns that also receive the user id (besides the id
+  /// column of the audit).
+  final List<String> idCols;
+
+  /// User-info columns that also receive [label] (besides the title column).
+  final List<String> labelCols;
+
+  /// Management column holding the sub-agent amount; rows where it is empty
+  /// or zero are not pulled.
+  final String shareCol;
+
+  Map<String, Object?> toJson() => {
+    'label': label,
+    'idCols': idCols,
+    'labelCols': labelCols,
+    'shareCol': shareCol,
+  };
+
+  static UnmentionedOptions fromJson(Object? j) {
+    if (j is! Map) return const UnmentionedOptions();
+    List<String> list(Object? v, List<String> d) =>
+        v is List ? [for (final x in v) x.toString()] : d;
+    final label = (j['label'] as String?)?.trim() ?? '';
+    return UnmentionedOptions(
+      label: label.isEmpty ? 'غير مذكور' : label,
+      idCols: list(j['idCols'], const ['A']),
+      labelCols: list(j['labelCols'], const ['E']),
+      shareCol: (j['shareCol'] as String?) ?? 'W',
+    );
+  }
+}

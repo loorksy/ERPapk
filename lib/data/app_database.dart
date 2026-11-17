@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'workspace_columns.dart';
+
+export 'workspace_columns.dart';
+
 typedef Rows = List<List<String>>;
 
 Rows decodeRows(String? json) {
@@ -826,20 +830,44 @@ class AppDatabase {
 
   // --------------------------------------------------------------- columns
 
+  /// Columns saved for the cycle by its last audit; before that, the
+  /// workspace defaults (Settings).
   Future<CycleColumns> getCycleColumns(int cycleId) async {
     final rows = await _db.query(
       'payroll_cycle_columns',
       where: 'cycle_id = ?',
       whereArgs: [cycleId],
     );
-    if (rows.isEmpty) return const CycleColumns();
+    final ws = await getWorkspaceColumns();
+    if (rows.isEmpty) {
+      return CycleColumns(
+        mgmtUserIdCol: ws.mgmtUserIdCol,
+        agentUserIdCol: ws.agentUserIdCol,
+        agentSalaryCol: ws.agentSalaryCol,
+      );
+    }
     final r = rows.first;
     return CycleColumns(
-      mgmtUserIdCol: (r['mgmt_user_id_col'] as String?) ?? 'A',
-      agentUserIdCol: (r['agent_user_id_col'] as String?) ?? 'A',
-      agentSalaryCol: (r['agent_salary_col'] as String?) ?? 'D',
+      mgmtUserIdCol: (r['mgmt_user_id_col'] as String?) ?? ws.mgmtUserIdCol,
+      agentUserIdCol: (r['agent_user_id_col'] as String?) ?? ws.agentUserIdCol,
+      agentSalaryCol: (r['agent_salary_col'] as String?) ?? ws.agentSalaryCol,
     );
   }
+
+  /// Default columns of this workspace (each workspace has its own
+  /// database, so its own columns).
+  Future<WorkspaceColumns> getWorkspaceColumns() async {
+    final raw = await getValue(WorkspaceColumns.storageKey);
+    if (raw == null) return const WorkspaceColumns();
+    try {
+      return WorkspaceColumns.fromJson(jsonDecode(raw));
+    } catch (_) {
+      return const WorkspaceColumns();
+    }
+  }
+
+  Future<void> saveWorkspaceColumns(WorkspaceColumns c) =>
+      setValue(WorkspaceColumns.storageKey, jsonEncode(c.toJson()));
 
   Future<void> saveCycleColumns(int cycleId, CycleColumns c) =>
       _db.insert('payroll_cycle_columns', {

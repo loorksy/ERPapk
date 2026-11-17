@@ -93,6 +93,10 @@ class _PayrollPageState extends State<PayrollPage> {
   bool _exporting = false;
   bool _loadingPending = false;
 
+  /// Default columns of the workspace (Settings).
+  WorkspaceColumns _ws = const WorkspaceColumns();
+  int _columnsRevision = -1;
+
   AppServices get _s => AppScope.read(context);
 
   @override
@@ -103,9 +107,15 @@ class _PayrollPageState extends State<PayrollPage> {
     if (!_ready) {
       _ready = true;
       _revision = services.cyclesRevision;
+      _columnsRevision = services.columnsRevision;
       _connected = connected;
       _init();
       return;
+    }
+    if (services.columnsRevision != _columnsRevision) {
+      // The workspace columns were changed in Settings: use them now.
+      _columnsRevision = services.columnsRevision;
+      _applyWorkspaceColumns();
     }
     if (services.cyclesRevision != _revision) {
       _revision = services.cyclesRevision;
@@ -128,6 +138,7 @@ class _PayrollPageState extends State<PayrollPage> {
   }
 
   Future<void> _init() async {
+    _ws = await _s.db.getWorkspaceColumns();
     await _loadSettings();
     await _loadCycles();
     await _restoreDraft();
@@ -265,10 +276,30 @@ class _PayrollPageState extends State<PayrollPage> {
           cycle.linkedToGoogle
               ? CycleService.columnsFromHeader(agentFirst)
               : fallback;
-      _cycleMgmtUserIdCol = _pickCol(_cycleMgmtCols, 'A', 'A');
-      _cycleAgentUserIdCol = _pickCol(_cycleAgentCols, 'A', 'A');
-      _cycleAgentSalaryCol = _pickCol(_cycleAgentCols, 'D', 'D');
+      _cycleMgmtUserIdCol = _pickCol(_cycleMgmtCols, _ws.mgmtUserIdCol, 'A');
+      _cycleAgentUserIdCol = _pickCol(_cycleAgentCols, _ws.agentUserIdCol, 'A');
+      _cycleAgentSalaryCol = _pickCol(_cycleAgentCols, _ws.agentSalaryCol, 'D');
     });
+  }
+
+  /// Applies the workspace columns (Settings) to every column choice.
+  Future<void> _applyWorkspaceColumns() async {
+    final ws = await _s.db.getWorkspaceColumns();
+    if (!mounted) return;
+    setState(() {
+      _ws = ws;
+      _cycleMgmtUserIdCol = _pickCol(_cycleMgmtCols, ws.mgmtUserIdCol, 'A');
+      _cycleAgentUserIdCol = _pickCol(_cycleAgentCols, ws.agentUserIdCol, 'A');
+      _cycleAgentSalaryCol = _pickCol(_cycleAgentCols, ws.agentSalaryCol, 'D');
+      _userInfoUserIdCol = _pickCol(_userInfoCols, ws.userInfoUserIdCol, 'C');
+      _userInfoTitleCol = _pickCol(_userInfoCols, ws.userInfoTitleCol, 'D');
+      _userInfoSalaryCol = _pickCol(_userInfoCols, ws.userInfoSalaryCol, 'L');
+      _userInfoStatusCol =
+          _userInfoCols.any((c) => c.letter == ws.userInfoStatusCol)
+              ? ws.userInfoStatusCol
+              : '';
+    });
+    _saveDraft();
   }
 
   static String _pickCol(
@@ -419,10 +450,13 @@ class _PayrollPageState extends State<PayrollPage> {
   void _applyColumnOptions(List<ColumnOption> cols) {
     setState(() {
       _userInfoCols = cols;
-      _userInfoUserIdCol = _pickCol(cols, 'C', 'C');
-      _userInfoTitleCol = _pickCol(cols, 'D', 'D');
-      _userInfoSalaryCol = _pickCol(cols, 'L', 'L');
-      _userInfoStatusCol = '';
+      _userInfoUserIdCol = _pickCol(cols, _ws.userInfoUserIdCol, 'C');
+      _userInfoTitleCol = _pickCol(cols, _ws.userInfoTitleCol, 'D');
+      _userInfoSalaryCol = _pickCol(cols, _ws.userInfoSalaryCol, 'L');
+      _userInfoStatusCol =
+          cols.any((c) => c.letter == _ws.userInfoStatusCol)
+              ? _ws.userInfoStatusCol
+              : '';
     });
   }
 
@@ -532,78 +566,14 @@ class _PayrollPageState extends State<PayrollPage> {
   /// 2/2 `payroll-execute`. A file from the phone runs the same audit
   /// locally instead.
   Future<void> _runAudit() async {
-    if (_cycleId.isEmpty || _spreadsheetId.isEmpty) {
-      showToast(
-        context,
-        'اختر الدورة وجدول معلومات المستخدمين أولاً',
-        ToastType.error,
-      );
-      return;
-    }
-    UserInfoSource source;
-    if (_spreadsheetId == _localSource) {
-      final f = _localFile;
-      if (f == null) {
-        showToast(
-          context,
-          'اختر ملف معلومات المستخدمين من الجهاز',
-          ToastType.error,
-        );
-        return;
-      }
-      final sheetName =
-          _userInfoSheet.isEmpty ? f.sheetNames.first : _userInfoSheet;
-      source = LocalUserInfo(f.fileName, sheetName, f.rowsOf(sheetName));
-    } else {
-      source = GoogleUserInfo(
-        _spreadsheetId,
-        _userInfoSheet.isEmpty ? null : _userInfoSheet,
-      );
-    }
-    final cycleId = int.parse(_cycleId);
-    await _s.db.saveCycleColumns(
-      cycleId,
-      CycleColumns(
-        mgmtUserIdCol: _cycleMgmtUserIdCol,
-        agentUserIdCol: _cycleAgentUserIdCol,
-        agentSalaryCol: _cycleAgentSalaryCol,
-      ),
-    );
-    if (!mounted) return;
-    final rawDiscount = _discount.text.trim();
-    final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
-    final request = PayrollRequest(
-      cycleId: cycleId,
-      userInfo: source,
-      discountRate: parsed == null || parsed.isNaN ? null : parsed,
-      agentColor: _agentColor,
-      managementColor: _mgmtColor,
-      columns: AuditColumns.of(
-        userInfoUserIdCol: _userInfoUserIdCol,
-        userInfoTitleCol: _userInfoTitleCol,
-        userInfoSalaryCol: _userInfoSalaryCol,
-        cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
-        cycleAgentUserIdCol: _cycleAgentUserIdCol,
-        cycleAgentSalaryCol: _cycleAgentSalaryCol,
-      ),
-      userInfoStatusCol: _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
-    );
-    _saveDraft();
+    final request = await _buildRequest();
+    if (request == null || !mounted) return;
+    final source = request.userInfo;
 
     if (source is GoogleUserInfo) {
       // Runs in the background (continues when the app is closed and
       // resumes after a lost connection); this page follows its progress.
-      final active = await _s.db.pendingAuditJobs();
-      if (!mounted) return;
-      if (active.isNotEmpty) {
-        showToast(
-          context,
-          'يوجد تدقيق قيد التنفيذ. انتظر انتهاءه ثم أعد المحاولة.',
-          ToastType.warning,
-        );
-        await _watchJob();
-        return;
-      }
+      if (!await _noActiveJob()) return;
       await _s.startAuditJob(request);
       if (!mounted) return;
       setState(() => _result = null);
@@ -634,6 +604,139 @@ class _PayrollPageState extends State<PayrollPage> {
         });
       }
     }
+  }
+
+  /// One background job at a time (the audit and the «غير مذكور» tools).
+  Future<bool> _noActiveJob() async {
+    final active = await _s.db.pendingAuditJobs();
+    if (!mounted) return false;
+    if (active.isEmpty) return true;
+    showToast(
+      context,
+      'يوجد تدقيق قيد التنفيذ. انتظر انتهاءه ثم أعد المحاولة.',
+      ToastType.warning,
+    );
+    await _watchJob();
+    return false;
+  }
+
+  /// The audit request from the page (cycle, user-info source, columns,
+  /// discount and colours); saves the cycle columns like ERP.
+  Future<PayrollRequest?> _buildRequest() async {
+    if (_cycleId.isEmpty || _spreadsheetId.isEmpty) {
+      showToast(
+        context,
+        'اختر الدورة وجدول معلومات المستخدمين أولاً',
+        ToastType.error,
+      );
+      return null;
+    }
+    UserInfoSource source;
+    if (_spreadsheetId == _localSource) {
+      final f = _localFile;
+      if (f == null) {
+        showToast(
+          context,
+          'اختر ملف معلومات المستخدمين من الجهاز',
+          ToastType.error,
+        );
+        return null;
+      }
+      final sheetName =
+          _userInfoSheet.isEmpty ? f.sheetNames.first : _userInfoSheet;
+      source = LocalUserInfo(f.fileName, sheetName, f.rowsOf(sheetName));
+    } else {
+      source = GoogleUserInfo(
+        _spreadsheetId,
+        _userInfoSheet.isEmpty ? null : _userInfoSheet,
+      );
+    }
+    final cycleId = int.parse(_cycleId);
+    await _s.db.saveCycleColumns(
+      cycleId,
+      CycleColumns(
+        mgmtUserIdCol: _cycleMgmtUserIdCol,
+        agentUserIdCol: _cycleAgentUserIdCol,
+        agentSalaryCol: _cycleAgentSalaryCol,
+      ),
+    );
+    if (!mounted) return null;
+    final rawDiscount = _discount.text.trim();
+    final parsed = rawDiscount.isEmpty ? null : jsParseFloat(rawDiscount);
+    final request = PayrollRequest(
+      cycleId: cycleId,
+      userInfo: source,
+      discountRate: parsed == null || parsed.isNaN ? null : parsed,
+      agentColor: _agentColor,
+      managementColor: _mgmtColor,
+      columns: AuditColumns.of(
+        userInfoUserIdCol: _userInfoUserIdCol,
+        userInfoTitleCol: _userInfoTitleCol,
+        userInfoSalaryCol: _userInfoSalaryCol,
+        cycleMgmtUserIdCol: _cycleMgmtUserIdCol,
+        cycleAgentUserIdCol: _cycleAgentUserIdCol,
+        cycleAgentSalaryCol: _cycleAgentSalaryCol,
+      ),
+      userInfoStatusCol: _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
+    );
+    _saveDraft();
+    return request;
+  }
+
+  /// Owner's «غير مذكور» tools: a background job like the audit.
+  Future<void> _runTool(String kind) async {
+    if (_spreadsheetId == _localSource) {
+      showToast(
+        context,
+        'هذه الأداة تعمل على جداول Google فقط. اختر جدول معلومات المستخدمين من Google.',
+        ToastType.warning,
+      );
+      return;
+    }
+    if (!(_cycle?.linkedToGoogle ?? false)) {
+      showToast(
+        context,
+        'هذه الأداة متاحة لدورات Google فقط.',
+        ToastType.warning,
+      );
+      return;
+    }
+    final ws = await _s.db.getWorkspaceColumns();
+    if (!mounted) return;
+    final label = ws.unmentionedLabel;
+    final users = kind == JobKind.unmentionedUsers;
+    final idCols = {_userInfoUserIdCol, ...ws.unmentionedIdCols}.join(' و');
+    final labelCols = {
+      _userInfoTitleCol,
+      ...ws.unmentionedLabelCols,
+    }.where((c) => !ws.unmentionedIdCols.contains(c)).join(' و');
+    final ok = await confirmDialog(
+      context,
+      icon: users ? FontAwesomeIcons.userPlus : FontAwesomeIcons.fileImport,
+      title: users ? 'تدقيق غير المذكورين' : 'سحب صفوف الإدارة إلى «$label»',
+      body:
+          users
+              ? 'سيُضاف كل رقم في ورقة الوكيل غير موجود في جدول معلومات المستخدمين مرة واحدة فقط (حتى لو له أكثر من راتب)، في صف جديد بعد آخر صف: الرقم في العمود $idCols، و«$label» في العمود $labelCols.\n\nثم تُدقق هذه الصفوف بنفس منطق التدقيق: تُنسخ صفوفها من ورقة الإدارة إلى ورقة «$label» (حسب عمود $_userInfoTitleCol)، ويُكتب الراتب والحالة، وتُلوّن. لا تتغير الصفوف الموجودة.'
+              : 'ستُنسخ صفوف ورقة الإدارة غير الملوّنة (غير المدققة) التي فيها مبلغ غير صفري في العمود ${ws.mgmtShareCol}، وصاحبها غير موجود في جدول معلومات المستخدمين، إلى ورقة «$label» في جدول الإدارة (تُنشأ إن لم تكن موجودة).\n\nتُلوّن الصفوف المنقولة بلون الإدارة حتى لا تُسحب مرة أخرى. يُفضّل تنفيذ «تدقيق غير المذكورين» قبلها.',
+      confirmLabel: users ? 'إضافة وتدقيق' : 'سحب الصفوف',
+    );
+    if (!ok || !mounted) return;
+    final request = await _buildRequest();
+    if (request == null || !mounted) return;
+    if (!await _noActiveJob()) return;
+    await _s.startAuditJob(
+      request,
+      kind: kind,
+      unmentioned: UnmentionedOptions(
+        label: label,
+        idCols: ws.unmentionedIdCols,
+        labelCols: ws.unmentionedLabelCols,
+        shareCol: ws.mgmtShareCol,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _result = null);
+    await _watchJob();
   }
 
   /// Shows the outcome of an audit like ERP (toast + results section).
@@ -721,6 +824,10 @@ class _PayrollPageState extends State<PayrollPage> {
     }
   }
 
+  /// The followed job is one of the «غير مذكور» tools (not the audit).
+  bool get _toolJob =>
+      _job != null && JobKind.of(_job!.request) != JobKind.audit;
+
   String _busyLabel() {
     final text = _running ? _progress : _job?.progress;
     if (_job?.status == AuditJob.waiting) return 'بانتظار الاتصال...';
@@ -731,6 +838,7 @@ class _PayrollPageState extends State<PayrollPage> {
 
   Widget _jobPanel(AuditJob job) {
     final waiting = job.status == AuditJob.waiting;
+    final name = JobKind.title(JobKind.of(job.request));
     final total = job.stepTotal;
     final done = job.stepNext.clamp(0, total);
     final duplicates =
@@ -754,8 +862,8 @@ class _PayrollPageState extends State<PayrollPage> {
               Expanded(
                 child: Text(
                   waiting
-                      ? 'التدقيق متوقف مؤقتًا — بانتظار الاتصال'
-                      : 'التدقيق يعمل في الخلفية',
+                      ? '$name متوقف مؤقتًا — بانتظار الاتصال'
+                      : '$name يعمل في الخلفية',
                   style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
@@ -793,7 +901,7 @@ class _PayrollPageState extends State<PayrollPage> {
           ],
           const SizedBox(height: 8),
           const Text(
-            'يمكنك إغلاق التطبيق: يكمل التدقيق في الخلفية، وإذا انقطع الإنترنت يستأنف من الخطوة التي توقف عندها (النسخ، الراتب والحالة، التلوين).',
+            'يمكنك إغلاق التطبيق: يكمل العمل في الخلفية، وإذا انقطع الإنترنت يستأنف من الخطوة التي توقف عندها (الإضافة، النسخ، الراتب والحالة، التلوين).',
             style: TextStyle(fontSize: 11.5, color: Tw.slate500, height: 1.6),
           ),
           if (waiting) ...[
@@ -932,6 +1040,7 @@ class _PayrollPageState extends State<PayrollPage> {
             _cycleSection(),
             if (_optionsVisible) _optionsSection(),
             _settingsSection(),
+            if (_optionsVisible && _cycleId.isNotEmpty) _toolsSection(),
             if (_result != null) _resultsSection(),
           ],
         ),
@@ -1041,7 +1150,7 @@ class _PayrollPageState extends State<PayrollPage> {
               style: const TextStyle(fontSize: 12, color: Tw.slate500),
             ),
           ],
-          if (_job?.active ?? false) ...[
+          if ((_job?.active ?? false) && !_toolJob) ...[
             const SizedBox(height: 12),
             _jobPanel(_job!),
           ],
@@ -1262,6 +1371,75 @@ class _PayrollPageState extends State<PayrollPage> {
     );
   }
 
+  /// Owner's requests (2026-11-17), after a full or partial audit: the
+  /// read-only list of agent users not audited yet, then the two
+  /// «غير مذكور» steps. Nothing is shown until a button is pressed.
+  Widget _toolsSection() {
+    final busy = _running || (_job?.active ?? false);
+    final google = _spreadsheetId != _localSource;
+    final label = _ws.unmentionedLabel;
+    Widget hint(String text) => Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 14),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 11.5, color: Tw.slate500, height: 1.6),
+      ),
+    );
+    return CardSection(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionCaption('أدوات بعد التدقيق'),
+          ErpButton(
+            label: 'عرض غير المدققين في ورقة الوكيل',
+            icon: FontAwesomeIcons.userClock,
+            kind: ErpButtonKind.outline,
+            loading: _loadingPending,
+            loadingLabel: 'جاري التحميل...',
+            height: 42,
+            fontSize: 13,
+            onPressed: _showUnaudited,
+          ),
+          hint('قائمة للقراءة فقط: الرقم والاسم والعدد المتبقي، مع النسخ.'),
+          ErpButton(
+            label: '١. تدقيق غير المذكورين',
+            icon: FontAwesomeIcons.userPlus,
+            kind: ErpButtonKind.indigoSoft,
+            height: 42,
+            fontSize: 13,
+            onPressed:
+                busy || !google
+                    ? null
+                    : () => _runTool(JobKind.unmentionedUsers),
+          ),
+          hint(
+            'يضيف أرقام ورقة الوكيل غير الموجودة في جدول معلومات المستخدمين (مرة واحدة لكل رقم) بعنوان «$label» ثم يدققها بنفس المنطق.',
+          ),
+          ErpButton(
+            label: '٢. سحب صفوف الإدارة غير الملوّنة إلى «$label»',
+            icon: FontAwesomeIcons.fileImport,
+            kind: ErpButtonKind.indigoSoft,
+            height: 42,
+            fontSize: 13,
+            onPressed:
+                busy || !google
+                    ? null
+                    : () => _runTool(JobKind.unmentionedMgmt),
+          ),
+          hint(
+            'ينسخ صفوف الإدارة غير الملوّنة التي فيها مبلغ في العمود ${_ws.mgmtShareCol} فقط إلى ورقة «$label» (تُنشأ إن لم تكن موجودة).',
+          ),
+          if (!google)
+            const Text(
+              'الأداتان ١ و٢ تعملان على جداول Google فقط.',
+              style: TextStyle(fontSize: 11.5, color: Tw.amber700),
+            ),
+          if ((_job?.active ?? false) && _toolJob) _jobPanel(_job!),
+        ],
+      ),
+    );
+  }
+
   Widget _settingsSection() => CardSection(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1330,7 +1508,7 @@ class _PayrollPageState extends State<PayrollPage> {
   Widget _resultContent() {
     final r = _result;
     if (r == null) return const SizedBox.shrink();
-    final s = r.summary!;
+    final s = r.summary;
     var msg = r.message;
     if (r.cycleSynced && !msg.contains('تمت مزامنة جداول الدورة')) {
       msg = 'تمت مزامنة جداول الدورة من Google ثم $msg';
@@ -1387,10 +1565,12 @@ class _PayrollPageState extends State<PayrollPage> {
           ),
         ),
         const SizedBox(height: 8),
-        li('إجمالي الصفوف', s.total),
-        li('سحب وكالة', s.agent),
-        li('سحب إدارة', s.management),
-        li('غير موجود', s.notFound),
+        if (s != null) ...[
+          li('إجمالي الصفوف', s.total),
+          li('سحب وكالة', s.agent),
+          li('سحب إدارة', s.management),
+          li('غير موجود', s.notFound),
+        ],
         if (r.duplicates.isNotEmpty) ...[
           const SizedBox(height: 12),
           _duplicatesBox(r.duplicates),
@@ -1408,8 +1588,10 @@ class _PayrollPageState extends State<PayrollPage> {
                   Uri.parse(r.spreadsheetUrl!),
                   mode: LaunchMode.externalApplication,
                 ),
-            child: const Text(
-              'فتح جدول معلومات المستخدمين في Google ←',
+            child: Text(
+              r.summary == null
+                  ? 'فتح جدول الإدارة في Google ←'
+                  : 'فتح جدول معلومات المستخدمين في Google ←',
               style: TextStyle(
                 fontSize: 14,
                 color: Tw.indigo600,
@@ -1418,17 +1600,6 @@ class _PayrollPageState extends State<PayrollPage> {
             ),
           ),
         ],
-        const SizedBox(height: 16),
-        ErpButton(
-          label: 'عرض غير المدققين في ورقة الوكيل',
-          icon: FontAwesomeIcons.userClock,
-          kind: ErpButtonKind.outline,
-          loading: _loadingPending,
-          loadingLabel: 'جاري التحميل...',
-          height: 42,
-          fontSize: 13,
-          onPressed: _showUnaudited,
-        ),
         if (r.localOnly) ...[
           const SizedBox(height: 10),
           ErpButton(

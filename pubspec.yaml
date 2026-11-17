@@ -1,7 +1,7 @@
 name: lork_audit_standalone
 description: LorkERP payroll audit running on the phone, with Google Sheets.
 publish_to: 'none'
-version: 2.3.0+6
+version: 2.4.0+7
 environment:
   sdk: '>=3.7.0 <4.0.0'
 dependencies:
@@ -27,6 +27,8 @@ dev_dependencies:
   sqflite_common_ffi: ^2.3.4+4
 flutter:
   uses-material-design: true
+  assets:
+    - assets/brand/logo.png
   fonts:
     - family: Tajawal
       fonts:

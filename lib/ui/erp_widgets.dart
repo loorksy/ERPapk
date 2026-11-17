@@ -748,3 +748,90 @@ class NoticeBox extends StatelessWidget {
     child: child,
   );
 }
+
+/// A confirmation dialog in the style of ERP's delete modal.
+Future<bool> confirmDialog(
+  BuildContext context, {
+  required FaIconData icon,
+  required String title,
+  required String body,
+  required String confirmLabel,
+  Color iconColor = Tw.indigo600,
+  Color iconBg = Tw.indigo50,
+  ErpButtonKind confirmKind = ErpButtonKind.indigo,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder:
+        (ctx) => Directionality(
+          textDirection: TextDirection.rtl,
+          child: Dialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: iconBg,
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: FaIcon(icon, color: iconColor, size: 22),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Tw.slate900,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      body,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        color: Tw.slate600,
+                        height: 1.7,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ErpButton(
+                            label: confirmLabel,
+                            kind: confirmKind,
+                            height: 42,
+                            onPressed: () => Navigator.pop(ctx, true),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ErpButton(
+                            label: 'إلغاء',
+                            kind: ErpButtonKind.outline,
+                            height: 42,
+                            onPressed: () => Navigator.pop(ctx, false),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+  );
+  return ok == true;
+}
