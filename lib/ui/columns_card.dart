@@ -1,11 +1,13 @@
 // Flutter 3.50 deprecates its bundled Material exports; keep the SDK widgets.
 // ignore_for_file: deprecated_member_use
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
-import '../erp/normalize.dart';
+import '../google/sheets_client.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'help.dart';
@@ -27,8 +29,6 @@ class _ColumnsPageState extends State<ColumnsPage> {
   final _labelCols = TextEditingController();
   bool _saving = false;
 
-  static final _letters = [for (var i = 0; i < 52; i++) columnIndexToLetter(i)];
-
   @override
   void initState() {
     super.initState();
@@ -46,6 +46,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
   Future<void> _load() async {
     final c = await AppScope.read(context).db.getWorkspaceColumns();
     if (mounted) _show(c);
+    _loadHeads();
   }
 
   void _show(WorkspaceColumns c) {
@@ -143,17 +144,61 @@ class _ColumnsPageState extends State<ColumnsPage> {
     String value,
     ValueChanged<String> onChanged, {
     bool allowAuto = false,
+    List<String> head = const [],
   }) => FormRow(
     label,
     CompactSelect<String>(
       options: [
         if (allowAuto) const SelectOption('', 'تلقائي'),
-        for (final l in _letters) SelectOption(l, l),
+        ...columnOptions(head),
       ],
+      shown: (v) => v.isEmpty ? 'تلقائي' : v,
       value: value,
       onChanged: onChanged,
     ),
   );
+
+  /// Header rows for the column names («C - رقم المستخدم» like ERPSYSTEM):
+  /// management and agent from the latest period on the phone, user info
+  /// from the audit's user-info sheet when Google is connected.
+  List<String> _uiHead = const [];
+  List<String> _mgmtHead = const [];
+  List<String> _agentHead = const [];
+
+  Future<void> _loadHeads() async {
+    final s = AppScope.read(context);
+    try {
+      final cycles = await s.db.listCycles();
+      if (cycles.isNotEmpty) {
+        final c = await s.db.getCycle(cycles.first.id);
+        if (c != null && mounted) {
+          setState(() {
+            _mgmtHead =
+                c.managementRows.isEmpty ? const [] : c.managementRows.first;
+            _agentHead = c.agentRows.isEmpty ? const [] : c.agentRows.first;
+          });
+        }
+      }
+      if (!s.auth.isConnected) return;
+      final raw = await s.db.getValue('payrollAuditDraftV1');
+      final d = raw == null ? const {} : jsonDecode(raw) as Map;
+      final ss = '${d['spreadsheetId'] ?? ''}';
+      if (ss.isEmpty) return;
+      var sheet = '${d['userInfoSheetName'] ?? ''}';
+      if (sheet.isEmpty) {
+        final meta = await s.sheets.getSpreadsheet(ss);
+        if (meta.sheets.isEmpty) return;
+        sheet = meta.sheets.first.title;
+      }
+      final rows = await s.sheets.valuesGet(
+        ss,
+        "'${escapeSheetTitleForRange(sheet)}'!1:1",
+      );
+      if (mounted && rows.isNotEmpty) setState(() => _uiHead = rows.first);
+    } catch (_) {
+      // Letters only.
+    }
+  }
 
   Widget _section(String title, Widget child, {Widget? after}) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -232,6 +277,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
                         onSurface: false,
                         children: [
                           _pick(
+                            head: _uiHead,
                             'رقم المستخدم',
                             c.userInfoUserIdCol,
                             (v) => setState(
@@ -239,12 +285,14 @@ class _ColumnsPageState extends State<ColumnsPage> {
                             ),
                           ),
                           _pick(
+                            head: _uiHead,
                             'اسم الوكالة (ورقة الوجهة)',
                             c.userInfoTitleCol,
                             (v) =>
                                 setState(() => _c = _with(userInfoTitleCol: v)),
                           ),
                           _pick(
+                            head: _uiHead,
                             'كتابة الراتب',
                             c.userInfoSalaryCol,
                             (v) => setState(
@@ -252,6 +300,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
                             ),
                           ),
                           _pick(
+                            head: _uiHead,
                             'كتابة الحالة',
                             c.userInfoStatusCol,
                             (v) => setState(
@@ -268,11 +317,13 @@ class _ColumnsPageState extends State<ColumnsPage> {
                         onSurface: false,
                         children: [
                           _pick(
+                            head: _mgmtHead,
                             'رقم المستخدم',
                             c.mgmtUserIdCol,
                             (v) => setState(() => _c = _with(mgmtUserIdCol: v)),
                           ),
                           _pick(
+                            head: _mgmtHead,
                             'مبلغ الوكيل الفرعي',
                             c.mgmtShareCol,
                             (v) => setState(() => _c = _with(mgmtShareCol: v)),
@@ -286,18 +337,21 @@ class _ColumnsPageState extends State<ColumnsPage> {
                         onSurface: false,
                         children: [
                           _pick(
+                            head: _agentHead,
                             'رقم المستخدم',
                             c.agentUserIdCol,
                             (v) =>
                                 setState(() => _c = _with(agentUserIdCol: v)),
                           ),
                           _pick(
+                            head: _agentHead,
                             'الراتب',
                             c.agentSalaryCol,
                             (v) =>
                                 setState(() => _c = _with(agentSalaryCol: v)),
                           ),
                           _pick(
+                            head: _agentHead,
                             'الاسم',
                             c.agentNameCol,
                             (v) => setState(() => _c = _with(agentNameCol: v)),

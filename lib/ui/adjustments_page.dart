@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
+import '../erp/js_compat.dart';
 import '../erp/normalize.dart';
 import '../google/sheets_client.dart';
 import '../services/adjustments_service.dart';
@@ -176,8 +177,28 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
           _files = [SpreadsheetFile(_ssId, meta.title ?? _ssId), ..._files];
         }
       });
+      await _loadHeader();
     } catch (e) {
       if (mounted) setState(() => _sheetMessage = '$e');
+    }
+  }
+
+  /// The header row of the salaries sheet: the column pickers show
+  /// «C - رقم المستخدم» like ERPSYSTEM.
+  List<String> _header = const [];
+
+  Future<void> _loadHeader() async {
+    if (_ssId.isEmpty || _sheet.isEmpty) return;
+    try {
+      final rows = await _s.sheets.valuesGet(
+        _ssId,
+        "'${escapeSheetTitleForRange(_sheet)}'!1:1",
+      );
+      if (mounted) {
+        setState(() => _header = rows.isEmpty ? const [] : rows.first);
+      }
+    } catch (_) {
+      // Letters only.
     }
   }
 
@@ -282,9 +303,9 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   // live counters, one primary action (or the run card), and «آخر تطبيق»
   // as three figures with «عرض التقرير».
 
-  List<SelectOption<String>> get _letterOptions => [
-    for (final l in _letters) SelectOption(l, l),
-  ];
+  /// ERP offers A–Z; named from the sheet's header when it is known.
+  List<SelectOption<String>> get _letterOptions =>
+      columnOptions(_header, minColumns: 26).take(26).toList();
 
   Future<void> _paste() async {
     final t = await pasteText();
@@ -353,6 +374,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                         value: _sheet,
                         onChanged: (v) {
                           setState(() => _sheet = v);
+                          _loadHeader();
                           setLocal(() {});
                           _saveDraft();
                         },
@@ -377,6 +399,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
               label,
               CompactSelect<String>(
                 options: _letterOptions,
+                shown: (v) => v,
                 value: value,
                 onChanged: (v) {
                   setState(() => set(v));
@@ -865,8 +888,80 @@ class _ResultsDialogState extends State<_ResultsDialog> {
       child: SizedBox(
         height: MediaQuery.of(context).size.height * 0.74,
         child: ListView.builder(
-          itemCount: out.results.length + 1,
-          itemBuilder: (_, i) => i == 0 ? head : _ResultRow(out.results[i - 1]),
+          // The results, then «خلاصة التسوية»: the netted users (like the
+          // bottom of the exported sheet).
+          itemCount:
+              out.results.length +
+              1 +
+              (out.settlements.isEmpty ? 0 : out.settlements.length + 1),
+          itemBuilder: (_, i) {
+            if (i == 0) return head;
+            final r = i - 1;
+            if (r < out.results.length) return _ResultRow(out.results[r]);
+            final k = r - out.results.length;
+            if (k == 0) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SheetLabel('خلاصة التسوية (المقاصة)'),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Tw.rule)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Expanded(flex: 4, child: _Head('رقم المستخدم')),
+                        Expanded(flex: 3, child: _Head('الإضافة', end: true)),
+                        Expanded(flex: 3, child: _Head('الخصم', end: true)),
+                        Expanded(flex: 3, child: _Head('الصافي', end: true)),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+            final x = out.settlements[k - 1];
+            String n(double v) => jsNumberToString(v);
+            Widget num(String t) => Expanded(
+              flex: 3,
+              child: Text(
+                ltr(t),
+                textAlign: TextAlign.left,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(fontSize: 14.5, color: Tw.ink),
+              ),
+            );
+            return Container(
+              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Tw.rule)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 4,
+                    child: Text(
+                      x.id,
+                      textDirection: TextDirection.ltr,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: Tw.ink,
+                      ),
+                    ),
+                  ),
+                  num(n(x.added)),
+                  num(n(x.deducted)),
+                  num(n(x.net)),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );

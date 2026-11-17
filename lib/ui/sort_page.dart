@@ -45,10 +45,16 @@ class _SortPageState extends State<SortPage> {
   /// 0 فرز، 1 دمج، 2 جبر الرواتب.
   int _tab = 0;
   String _sortCol = 'E';
+
+  /// Owner's request: the sorted rows are coloured in the sorted sheet.
+  String _sortColor = '#a7f3d0';
   final _headerRow = TextEditingController(text: '1');
   String _nameCol = 'A';
   String _mergeSalaryCol = 'L';
   String? _lastMerge;
+
+  /// The first rows of the sheet, for the column names of the pickers.
+  List<List<String>> _headRows = const [];
   String _salaryCol = 'L';
   RoundingMode _mode = RoundingMode.floor;
   RoundingMode _defaultMode = RoundingMode.floor;
@@ -124,6 +130,7 @@ class _SortPageState extends State<SortPage> {
       'ssId': _ssId,
       'sheet': _sheet,
       'sortCol': _sortCol,
+      'sortColor': _sortColor,
       'salaryCol': _salaryCol,
       'headerRow': _headerRow.text,
       'nameCol': _nameCol,
@@ -153,6 +160,8 @@ class _SortPageState extends State<SortPage> {
       _ssId = '${d['ssId'] ?? ''}';
       _sheet = '${d['sheet'] ?? ''}';
       _sortCol = col(d['sortCol'], 'E');
+      final sc = '${d['sortColor'] ?? ''}';
+      if (RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(sc)) _sortColor = sc;
       _salaryCol = col(d['salaryCol'], _ws.userInfoSalaryCol);
       _nameCol = col(d['nameCol'], 'A');
       _mergeSalaryCol = col(d['mergeSalaryCol'], _ws.userInfoSalaryCol);
@@ -228,8 +237,26 @@ class _SortPageState extends State<SortPage> {
           _files = [SpreadsheetFile(_ssId, meta.title ?? _ssId), ..._files];
         }
       });
+      await _loadHeaders();
     } catch (e) {
       if (mounted) setState(() => _sheetMessage = '$e');
+    }
+  }
+
+  /// Reads the header rows (up to the merge's header row) so the column
+  /// pickers show «A - رقم المستخدم» like ERPSYSTEM.
+  Future<void> _loadHeaders() async {
+    final title = _sheet.isNotEmpty ? _sheet : _sheetNames.firstOrNull;
+    if (_ssId.isEmpty || title == null) return;
+    final n = (int.tryParse(_headerRow.text.trim()) ?? 1).clamp(1, 50);
+    try {
+      final rows = await _s.sheets.valuesGet(
+        _ssId,
+        "'${escapeSheetTitleForRange(title)}'!1:$n",
+      );
+      if (mounted) setState(() => _headRows = rows);
+    } catch (_) {
+      // Letters only.
     }
   }
 
@@ -295,6 +322,7 @@ class _SortPageState extends State<SortPage> {
         spreadsheetId: _ssId,
         plan: plan,
         idColumn: _ws.userInfoUserIdCol,
+        color: _sortColor,
         onProgress: (sheet, done, total) {
           if (!mounted) return;
           setState(() {
@@ -335,6 +363,10 @@ class _SortPageState extends State<SortPage> {
               (formatCount(out.skipped), 'موجودة من قبل', null),
             ],
           ),
+          if (out.colored > 0)
+            Caption(
+              'لُوّن ${formatCount(out.colored)} صفًا في الورقة المفروزة.',
+            ),
           const SheetLabel('الأوراق'),
           FormRows(
             children: [
@@ -706,6 +738,7 @@ class _SortPageState extends State<SortPage> {
                           setState(() => _sheet = v);
                           setLocal(() {});
                           _saveDraft();
+                          _loadHeaders();
                         },
                       ),
                       block: true,
@@ -729,19 +762,25 @@ class _SortPageState extends State<SortPage> {
     ),
   );
 
-  Widget _colPicker(String value, ValueChanged<String> onChanged) =>
-      CompactSelect<String>(
-        options: [for (final l in _letters) SelectOption(l, l)],
-        value: value,
-        maxWidth: 96,
-        onChanged:
-            _busy
-                ? null
-                : (v) {
-                  setState(() => onChanged(v));
-                  _saveDraft();
-                },
-      );
+  Widget _colPicker(
+    String value,
+    ValueChanged<String> onChanged, {
+    int headerRow = 1,
+  }) => CompactSelect<String>(
+    options: columnOptions(
+      headerRow - 1 < _headRows.length ? _headRows[headerRow - 1] : const [],
+    ),
+    shown: (v) => v,
+    value: value,
+    maxWidth: 96,
+    onChanged:
+        _busy
+            ? null
+            : (v) {
+              setState(() => onChanged(v));
+              _saveDraft();
+            },
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -834,6 +873,18 @@ class _SortPageState extends State<SortPage> {
             ),
             trailing: _colPicker(_sortCol, (v) => _sortCol = v),
           ),
+          ListRow(
+            leading: IconChip(Icons.format_color_fill),
+            title: 'لون الصفوف المفروزة',
+            subtitle: const Text('تُلوَّن في ورقة بيانات المستخدمين نفسها'),
+            trailing: ColorSwatchButton(
+              value: _sortColor,
+              onChanged: (v) {
+                setState(() => _sortColor = v);
+                _saveDraft();
+              },
+            ),
+          ),
         ],
       ),
     ),
@@ -849,7 +900,7 @@ class _SortPageState extends State<SortPage> {
             onPressed: _busy ? null : _previewSort,
           ),
           const Caption(
-            'تُنشأ الأوراق الناقصة في نفس الجدول، ولا يُنسخ صف موجود في ورقته من قبل. لا تتغير ورقة بيانات المستخدمين.',
+            'تُنشأ الأوراق الناقصة في نفس الجدول، ولا يُنسخ صف موجود في ورقته من قبل. في ورقة بيانات المستخدمين تُلوَّن الصفوف المفروزة فقط، ولا تتغير قيمها.',
             center: true,
           ),
         ],
@@ -893,7 +944,11 @@ class _SortPageState extends State<SortPage> {
               width: 84,
               child: NumberBox(
                 controller: _headerRow,
-                onChanged: (_) => _saveDraft(),
+                onChanged: (_) {
+                  setState(() {});
+                  _saveDraft();
+                  _loadHeaders();
+                },
               ),
             ),
           ),
@@ -901,13 +956,21 @@ class _SortPageState extends State<SortPage> {
             leading: IconChip(Icons.badge_outlined),
             title: 'عمود الاسم',
             subtitle: const Text('الصفوف بنفس الاسم تُدمج'),
-            trailing: _colPicker(_nameCol, (v) => _nameCol = v),
+            trailing: _colPicker(
+              _nameCol,
+              (v) => _nameCol = v,
+              headerRow: int.tryParse(_headerRow.text.trim()) ?? 1,
+            ),
           ),
           ListRow(
             leading: IconChip(Icons.payments_outlined),
             title: 'عمود الراتب',
             subtitle: const Text('تُجمع رواتب الاسم الواحد'),
-            trailing: _colPicker(_mergeSalaryCol, (v) => _mergeSalaryCol = v),
+            trailing: _colPicker(
+              _mergeSalaryCol,
+              (v) => _mergeSalaryCol = v,
+              headerRow: int.tryParse(_headerRow.text.trim()) ?? 1,
+            ),
           ),
         ],
       ),

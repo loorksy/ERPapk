@@ -573,16 +573,19 @@ class AdjustmentsService {
 
   static const resultsSheetName = 'إضافات وخصومات';
 
-  /// The results laid out as the owner pastes them by hand: the pasted
-  /// lines in A–C, column D empty, each line's result in E–G (as «نسخ»
-  /// copies it), the totals under them, and the settled users in a table
-  /// further down.
+  /// The results laid out as the owner pastes them by hand. Owner's layout (2026-11-17, the «خلاصة التسوية» example): A–C hold
+  /// the list after the settlement — the pasted lines, with the lines of a
+  /// netted user replaced by one line carrying the net (on the first line
+  /// of the net's type, so deductions stay with deductions and additions
+  /// with additions) — column D empty, E–G the result beside each line (as
+  /// «نسخ» copies it), the totals under them, and the settled users in a
+  /// table further down.
   static ResultsSheet sheetLayout(AdjustOutcome out) {
     String m(double v) => money(v).replaceFirst('.', ',');
     final rows = <List<Object?>>[
       [
         'رقم المستخدم',
-        'النوع',
+        'الحالة',
         'المبلغ',
         '',
         'رقم المستخدم',
@@ -590,20 +593,54 @@ class AdjustmentsService {
         'المبلغ',
       ],
     ];
-    for (final l in out.lines) {
-      final a = [
+    bool deduction(AdjustSheetLine l) =>
+        l.cells.length > 1 && l.cells[1].contains('خصم');
+    final settledBy = {
+      for (final x in out.settlements) normalizeUserId(x.id): x,
+    };
+    // The lines of each netted group: the line with the result and the
+    // lines merged into it.
+    final group = <int, List<int>>{};
+    for (var n = 0; n < out.lines.length; n++) {
+      final l = out.lines[n];
+      final anchor =
+          l.mergedInto >= 0 ? l.mergedInto : (l.result >= 0 ? n : -1);
+      if (anchor >= 0) group.putIfAbsent(anchor, () => []).add(n);
+    }
+    // Where each netted group is written.
+    final placeAt = <int, int>{};
+    for (final e in group.entries) {
+      final r = out.lines[e.key].result;
+      if (r < 0 || r >= out.results.length) continue;
+      final x = settledBy[normalizeUserId(out.results[r].id)];
+      if (x == null || e.value.length < 2) continue;
+      final want =
+          x.net == 0
+              ? e.value.first
+              : e.value.firstWhere(
+                (n) => deduction(out.lines[n]) == (x.net < 0),
+                orElse: () => e.value.first,
+              );
+      for (final n in e.value) {
+        placeAt[n] = n == want ? e.key : -1;
+      }
+    }
+    for (var n = 0; n < out.lines.length; n++) {
+      final l = out.lines[n];
+      final at = placeAt[n];
+      if (at == -1) continue; // folded into the netted line
+      var a = [
         for (var i = 0; i < 3; i++) i < l.cells.length ? l.cells[i] : '',
       ];
       var e = <Object?>['', '', ''];
-      if (l.result >= 0 && l.result < out.results.length) {
-        final r = out.results[l.result];
-        e = [r.id, r.displayStatus, m(r.amount)];
-      } else if (l.mergedInto >= 0) {
-        e = [
-          l.cells.isEmpty ? '' : l.cells.first,
-          'ضمن المقاصة (الصف ${l.mergedInto + 2})',
-          '',
-        ];
+      final r = at != null ? out.lines[at].result : l.result;
+      if (r >= 0 && r < out.results.length) {
+        final res = out.results[r];
+        e = [res.id, res.status, m(res.amount)];
+        if (at != null) {
+          final x = settledBy[normalizeUserId(res.id)]!;
+          a = [a[0], a[1], jsNumberToString(x.net.abs())];
+        }
       }
       rows.add([...a, '', ...e]);
     }

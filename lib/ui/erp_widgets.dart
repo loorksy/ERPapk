@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../erp/normalize.dart';
 import 'erp_theme.dart';
 
 // ------------------------------------------------------------------ toast
@@ -1112,4 +1113,22 @@ class SheetSearch extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Column choices named like ERPSYSTEM («A - رقم المستخدم») from a header
+/// row; a column without a title keeps its letter. At least [minColumns].
+List<SelectOption<String>> columnOptions(
+  List<String> header, {
+  int minColumns = 52,
+}) {
+  final n = header.length > minColumns ? header.length : minColumns;
+  return [
+    for (var i = 0; i < n; i++)
+      SelectOption(
+        columnIndexToLetter(i),
+        i < header.length && header[i].trim().isNotEmpty
+            ? '${columnIndexToLetter(i)} - ${header[i].trim()}'
+            : columnIndexToLetter(i),
+      ),
+  ];
 }

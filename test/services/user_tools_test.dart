@@ -258,8 +258,19 @@ void main() {
         spreadsheetId: 'ui',
         plan: plan,
         idColumn: 'C',
+        color: '#a7f3d0',
       );
       expect(out.created.toSet(), {'دمشق', 'غير مذكور'});
+      // The sorted rows are coloured in the sorted sheet (rows 2–6).
+      expect(out.colored, 5);
+      final dataId = fake.ids['ui']!['Data'];
+      expect(fake.colors['ui|$dataId'], {
+        1: '#a7f3d0',
+        2: '#a7f3d0',
+        3: '#a7f3d0',
+        4: '#a7f3d0',
+        5: '#a7f3d0',
+      });
       expect(out.skipped, 1);
       final book = fake.books['ui']!;
       expect(book['دمشق']!.first, header);

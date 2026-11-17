@@ -127,68 +127,94 @@ void main() {
     expect(text, contains('مجموع تم خصم\t\t\$40'));
   });
 
-  test('results sheet: pasted lines, aligned results, totals, settlements', () {
-    const bulk =
-        '1002\tخصم\t20\n\n1001\tخصم\t50\n9999\tخصم\t5\n1001\tاضافة\t30\n\n';
-    final c = AdjustmentsService.computeBulk(bulk, sheet);
-    final out = AdjustOutcome(
-      success: true,
-      message: '',
-      results: c.results,
-      summary: AdjustmentsService.summarize(c.results),
-      lines: AdjustmentsService.sheetLines(bulk, c),
-      settlements: c.settlements,
-    );
-    final layout = AdjustmentsService.sheetLayout(out);
-    final rows = layout.rows;
-    expect(rows[0], [
-      'رقم المستخدم',
-      'النوع',
-      'المبلغ',
-      '',
-      'رقم المستخدم',
-      'الحالة',
-      'المبلغ',
-    ]);
-    // One row per pasted line (trailing blank lines dropped), result beside it.
-    expect(rows[1], [
-      '1002',
-      'خصم',
-      '20',
-      '',
-      '1002',
-      'تم الخصم بالكامل',
-      '\$20',
-    ]);
-    expect(rows[2], ['', '', '', '', '', '', '']);
-    expect(rows[3], [
-      '1001',
-      'خصم',
-      '50',
-      '',
-      '1001',
-      'باقي عليه (مقاصة)',
-      '\$10',
-    ]);
-    expect(rows[4], ['9999', 'خصم', '5', '', '9999', 'غير موجود', '\$5']);
-    expect(rows[5], [
-      '1001',
-      'اضافة',
-      '30',
-      '',
-      '1001',
-      'ضمن المقاصة (الصف 4)',
-      '',
-    ]);
-    expect(rows[6], isEmpty);
-    expect(rows[7], ['', '', '', '', 'مجموع المتبقي (لنا عليهم)', '', '\$10']);
-    expect(rows[8], ['', '', '', '', 'مجموع تم خصم', '', '\$30']);
-    expect(rows[9], ['', '', '', '', 'مجموع غير موجود', '', '\$5']);
-    // Five empty rows, then the settled users.
-    expect(layout.settleHeader, 16);
-    expect(rows[15], ['رقم المستخدم', 'الإضافة', 'الخصم', 'الصافي']);
-    expect(rows[16], ['1001', 30.0, 50.0, -20.0]);
-  });
+  test(
+    'results sheet: the settlement summary, results, totals, settlements',
+    () {
+      const bulk =
+          '1002\tخصم\t20\n\n1001\tخصم\t50\n9999\tخصم\t5\n1001\tاضافة\t30\n\n';
+      final c = AdjustmentsService.computeBulk(bulk, sheet);
+      final out = AdjustOutcome(
+        success: true,
+        message: '',
+        results: c.results,
+        summary: AdjustmentsService.summarize(c.results),
+        lines: AdjustmentsService.sheetLines(bulk, c),
+        settlements: c.settlements,
+      );
+      final layout = AdjustmentsService.sheetLayout(out);
+      final rows = layout.rows;
+      expect(rows[0], [
+        'رقم المستخدم',
+        'الحالة',
+        'المبلغ',
+        '',
+        'رقم المستخدم',
+        'الحالة',
+        'المبلغ',
+      ]);
+      expect(rows[1], [
+        '1002',
+        'خصم',
+        '20',
+        '',
+        '1002',
+        'تم الخصم بالكامل',
+        '\$20',
+      ]);
+      // Blank pasted lines stay blank (trailing ones dropped).
+      expect(rows[2], ['', '', '', '', '', '', '']);
+      // 1001: −50 and +30 netted to one deduction of 20, with its result.
+      expect(rows[3], ['1001', 'خصم', '20', '', '1001', 'باقي عليه', '\$10']);
+      expect(rows[4], ['9999', 'خصم', '5', '', '9999', 'غير موجود', '\$5']);
+      expect(rows[5], isEmpty);
+      expect(rows[6], [
+        '',
+        '',
+        '',
+        '',
+        'مجموع المتبقي (لنا عليهم)',
+        '',
+        '\$10',
+      ]);
+      expect(rows[7], ['', '', '', '', 'مجموع تم خصم', '', '\$30']);
+      expect(rows[8], ['', '', '', '', 'مجموع غير موجود', '', '\$5']);
+      // Five empty rows, then the settled users.
+      expect(layout.settleHeader, 15);
+      expect(rows[14], ['رقم المستخدم', 'الإضافة', 'الخصم', 'الصافي']);
+      expect(rows[15], ['1001', 30.0, 50.0, -20.0]);
+    },
+  );
+
+  test(
+    'a net addition is written in the additions block (owner\'s example)',
+    () {
+      // Deductions, a blank line, additions — like the owner's lists.
+      const bulk =
+          '1002\tخصم\t20\n1003\tخصم\t5\n\n1001\tاضافة\t30\n1003\tاضافة\t20';
+      final c = AdjustmentsService.computeBulk(bulk, sheet);
+      final out = AdjustOutcome(
+        success: true,
+        message: '',
+        results: c.results,
+        summary: AdjustmentsService.summarize(c.results),
+        lines: AdjustmentsService.sheetLines(bulk, c),
+        settlements: c.settlements,
+      );
+      final rows = AdjustmentsService.sheetLayout(out).rows;
+      expect(
+        [for (final r in rows.skip(1).take(4)) r.take(3).toList()],
+        [
+          ['1002', 'خصم', '20'],
+          ['', '', ''],
+          ['1001', 'اضافة', '30'],
+          ['1003', 'اضافة', '15'],
+        ],
+      );
+      expect(rows[4][4], '1003');
+      expect('${rows[4][5]}'.contains('مقاصة'), isFalse);
+      expect(rows[5], isEmpty);
+    },
+  );
 
   test(
     'upgrading a 2.4 database keeps its jobs and allows cycle-less ones',
@@ -386,8 +412,17 @@ void main() {
           ['إضافات وخصومات'],
         );
         final written = fake.books['ui']!['إضافات وخصومات']!;
-        expect(written[1].sublist(4), ['1001', 'باقي عليه (مقاصة)', '\$10']);
-        expect(written[2].sublist(4, 6), ['1001', 'ضمن المقاصة (الصف 2)']);
+        // One line per user after the settlement: 1001 nets to −20.
+        expect(written[1], [
+          '1001',
+          'خصم',
+          '20',
+          '',
+          '1001',
+          'باقي عليه',
+          '\$10',
+        ]);
+        expect(written[2].sublist(0, 2), ['1004', 'اضافة']);
         expect(
           written.any(
             (r) => r.length > 3 && r[0] == 'رقم المستخدم' && r[3] == 'الصافي',

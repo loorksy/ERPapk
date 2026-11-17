@@ -4,6 +4,7 @@ import '../data/app_database.dart';
 import '../erp/normalize.dart';
 import '../google/sheets_client.dart';
 import 'adjustments_service.dart';
+import 'payroll_service.dart' show mergedColorRequests;
 
 /// Owner's request (2026-11-17): tools on the user-info sheet in the «فرز»
 /// section. They only read that sheet and write new / other sheets of the
@@ -211,6 +212,7 @@ class SortOutcome {
     required this.created,
     required this.copied,
     required this.skipped,
+    this.colored = 0,
   });
 
   /// Sheets created by this run.
@@ -221,6 +223,9 @@ class SortOutcome {
 
   /// Rows already in their sheet (not copied again).
   final int skipped;
+
+  /// Rows coloured in the sorted sheet.
+  final int colored;
 
   int get total => copied.values.fold(0, (a, b) => a + b);
 }
@@ -382,10 +387,14 @@ class UserSheetTools {
   /// Copies each group to its sheet: new sheets get the header row then
   /// the rows; existing sheets get only the rows whose user id ([idColumn])
   /// is not there yet (whole-row match when the id is empty).
+  ///
+  /// Owner's request: the sorted rows are then coloured with [color] in the
+  /// sorted sheet itself (consecutive rows in one range, like the audit).
   Future<SortOutcome> runSort({
     required String spreadsheetId,
     required SortPlan plan,
     required String idColumn,
+    String? color,
     void Function(String step, int done, int total)? onProgress,
   }) async {
     final sheets = sheetsProvider();
@@ -494,8 +503,36 @@ class UserSheetTools {
       copied[g.sheetName] = rows.length;
       done++;
     }
+    var colored = 0;
+    final source =
+        meta.sheets.where((x) => x.title == plan.sheetTitle).firstOrNull;
+    if (color != null && color.isNotEmpty && source != null) {
+      onProgress?.call('تلوين «${plan.sheetTitle}»', done, plan.groups.length);
+      final byRow = {
+        for (final g in plan.groups)
+          for (final i in g.rows) i: color,
+      };
+      final requests = mergedColorRequests(
+        source.sheetId,
+        byRow,
+        source.columnCount ?? (width > 26 ? width : 26),
+      );
+      for (var i = 0; i < requests.length; i += 500) {
+        final part = requests.sublist(
+          i,
+          i + 500 > requests.length ? requests.length : i + 500,
+        );
+        await withSheetsRetry(() => sheets.batchUpdate(spreadsheetId, part));
+      }
+      colored = byRow.length;
+    }
     onProgress?.call('', done, plan.groups.length);
-    return SortOutcome(created: created, copied: copied, skipped: skipped);
+    return SortOutcome(
+      created: created,
+      copied: copied,
+      skipped: skipped,
+      colored: colored,
+    );
   }
 
   // ----------------------------------------------------------- rounding
