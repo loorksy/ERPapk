@@ -298,7 +298,7 @@ class PayrollPageState extends State<PayrollPage> {
     if (!mounted) return;
     showToast(
       context,
-      close ? 'تم إغلاق جلسة التدقيق' : 'تم إعادة فتح جلسة التدقيق',
+      close ? 'أُقفل التدقيق' : 'أُعيد فتح التدقيق',
       ToastType.success,
     );
     _s.cyclesChanged();

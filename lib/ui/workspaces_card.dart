@@ -14,46 +14,61 @@ Future<String?> askWorkspaceName(
   BuildContext context,
   String title, {
   String initial = '',
-}) {
-  final c = TextEditingController(text: initial);
-  return showDialog<String>(
-    context: context,
-    builder:
-        (ctx) => Directionality(
-          textDirection: TextDirection.rtl,
-          child: AlertDialog(
-            title: Text(title),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (initial.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      'لكل مساحة فتراتها وتدقيقها وإعداداتها، منفصلة عن غيرها.',
-                    ),
-                  ),
-                ErpTextField(
-                  controller: c,
-                  hint: 'مثال: شركة النور',
-                  maxLength: 60,
-                ),
-              ],
+}) => showDialog<String>(
+  context: context,
+  builder: (_) => _NameDialog(title: title, initial: initial),
+);
+
+/// The name dialog owns its text controller, so it is disposed only when
+/// the dialog has left the screen (not while it is still animating out).
+class _NameDialog extends StatefulWidget {
+  const _NameDialog({required this.title, required this.initial});
+  final String title;
+  final String initial;
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final _c = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Directionality(
+    textDirection: TextDirection.rtl,
+    child: AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.initial.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                'لكل مساحة فتراتها وتدقيقها وإعداداتها، منفصلة عن غيرها.',
+              ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('إلغاء'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, c.text),
-                child: const Text('حفظ'),
-              ),
-            ],
-          ),
+          ErpTextField(controller: _c, hint: 'مثال: شركة النور', maxLength: 60),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
         ),
-  ).whenComplete(c.dispose);
+        TextButton(
+          onPressed: () => Navigator.pop(context, _c.text),
+          child: const Text('حفظ'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Settings → workspaces (owner's request, 2026-11-17): several companies

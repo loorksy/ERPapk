@@ -12,7 +12,22 @@ import 'erp_theme.dart';
 
 enum ToastType { success, error, warning, info }
 
-OverlayEntry? _toastEntry;
+/// The toast on screen. Removed explicitly: a toast replaced in the same
+/// frame it was shown is not mounted yet, and must still go away.
+class _Toast {
+  _Toast(this.entry);
+  final OverlayEntry entry;
+  bool _gone = false;
+  void remove() {
+    if (_gone) return;
+    _gone = true;
+    try {
+      entry.remove();
+    } catch (_) {}
+  }
+}
+
+_Toast? _toast;
 Timer? _toastTimer;
 
 /// ERP `showToast(message, type)`, drawn like the mockup's `.toast`: ink
@@ -32,16 +47,15 @@ void showToast(
     ToastType.info => Icons.info_outline,
   };
   _toastTimer?.cancel();
-  final old = _toastEntry;
-  if (old != null && old.mounted) old.remove();
-  final entry = OverlayEntry(
-    builder: (ctx) => _ToastView(message: message, icon: icon),
+  _toast?.remove();
+  final toast = _Toast(
+    OverlayEntry(builder: (ctx) => _ToastView(message: message, icon: icon)),
   );
-  overlay.insert(entry);
-  _toastEntry = entry;
+  overlay.insert(toast.entry);
+  _toast = toast;
   _toastTimer = Timer(Duration(seconds: type == ToastType.error ? 6 : 4), () {
-    if (entry.mounted) entry.remove();
-    if (identical(_toastEntry, entry)) _toastEntry = null;
+    toast.remove();
+    if (identical(_toast, toast)) _toast = null;
   });
 }
 
