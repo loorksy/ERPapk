@@ -17,6 +17,7 @@ import '../services/adjustments_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'spreadsheet_link.dart';
+import 'ui_kit.dart';
 
 const _draftKey = 'adjustmentsDraftV1';
 
@@ -278,6 +279,9 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   );
 
   // ------------------------------------------------------------------ UI
+  //
+  // Owner's redesign (2026-11-17): panels without a page heading, details
+  // behind «!», the columns folded by default. Same controls and actions.
 
   Widget _select(
     String label,
@@ -287,7 +291,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   ) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      FieldLabel(label, small: true, bold: true),
+      FieldHeader(label),
       ErpSelect<String>(options: options, value: value, onChanged: onChanged),
     ],
   );
@@ -303,14 +307,13 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
       children: [
-        const PageHeading(
-          icon: FontAwesomeIcons.scaleBalanced,
-          title: 'إضافات وخصومات',
-          subtitle: 'معالجة جماعية على جدول Google.',
-        ),
-        const SizedBox(height: 16),
-        ErpCard(
-          padding: const EdgeInsets.all(14),
+        Panel(
+          title: 'جدول البيانات',
+          icon: FontAwesomeIcons.table,
+          iconColor: Tw.emerald600,
+          iconBg: Tw.emerald50,
+          info:
+              'الجدول والورقة التي فيها رواتب المستخدمين (عادة جدول معلومات المستخدمين). تُعدَّل فيها الرواتب ويُكتب عمود الحالة، ومنها تُنشأ ورقة «إضافات وخصومات» عند «دفع إلى الشيت».',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -336,52 +339,57 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                   if (_sheet.isNotEmpty && !_sheetNames.contains(_sheet))
                     SelectOption(_sheet, _sheet),
                 ],
-                _sheetNames.isEmpty && !_sheetNames.contains(_sheet)
-                    ? (_sheet.isEmpty ? '' : _sheet)
-                    : _sheet,
+                _sheet,
                 (v) {
                   setState(() => _sheet = v);
                   _saveDraft();
                 },
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  for (final (i, label, value, set) in [
-                    (0, 'عمود ID', _idCol, (String v) => _idCol = v),
-                    (
-                      1,
-                      'عمود الراتب',
-                      _salaryCol,
-                      (String v) => _salaryCol = v,
-                    ),
-                    (
-                      2,
-                      'عمود الحالة',
-                      _statusCol,
-                      (String v) => _statusCol = v,
-                    ),
-                  ]) ...[
-                    if (i > 0) const SizedBox(width: 8),
-                    Expanded(
-                      child: _select(label, _letterOptions, value, (v) {
-                        setState(() => set(v));
-                        _saveDraft();
-                      }),
-                    ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 14),
-              const FieldLabel(
-                'البيانات (رقم ← نوع ← مبلغ)',
-                small: true,
-                bold: true,
-              ),
+            ],
+          ),
+        ),
+        gap,
+        CollapsiblePanel(
+          title: 'الأعمدة',
+          icon: FontAwesomeIcons.tableColumns,
+          info:
+              'عمود رقم المستخدم، وعمود الراتب الذي يُعدَّل، وعمود الحالة الذي يُكتب فيه «تم خصم …» أو «تم اضافة …». الافتراضي كما في النظام: C و L و O.',
+          summary: SummaryText(
+            'ID $_idCol · الراتب $_salaryCol · الحالة $_statusCol',
+          ),
+          child: Row(
+            children: [
+              for (final (i, label, value, set) in [
+                (0, 'عمود ID', _idCol, (String v) => _idCol = v),
+                (1, 'عمود الراتب', _salaryCol, (String v) => _salaryCol = v),
+                (2, 'عمود الحالة', _statusCol, (String v) => _statusCol = v),
+              ]) ...[
+                if (i > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: _select(label, _letterOptions, value, (v) {
+                    setState(() => set(v));
+                    _saveDraft();
+                  }),
+                ),
+              ],
+            ],
+          ),
+        ),
+        gap,
+        Panel(
+          title: 'القائمة',
+          icon: FontAwesomeIcons.listOl,
+          iconColor: Tw.violet500,
+          iconBg: const Color(0xfff5f3ff),
+          info:
+              'كل سطر: رقم المستخدم ← النوع ← المبلغ، مفصولة بـTab (كما تُنسخ من Excel) أو بمسافات. النوع «خصم» يخصم، وأي نوع آخر (اضافة، إضافة…) يضيف. للخصم الكامل: «12345  خصم كامل» بدون مبلغ.\n\nإذا جاء نفس الرقم بإضافة وخصم في القائمة نفسها تُجمع عملياته أولًا في تسوية واحدة (الإضافات ناقص الخصومات) ثم تُطبَّق مرة واحدة، ويُكتب في عمود الحالة «تم خصم …» أو «تم اضافة …» مع تفاصيل التسوية.\n\nتكمل المعالجة في الخلفية، وإذا انقطع الإنترنت تُستأنف دون تكرار أي إضافة أو خصم.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               TextField(
                 controller: _bulk,
-                minLines: 5,
-                maxLines: 12,
+                minLines: 6,
+                maxLines: 14,
                 textDirection: TextDirection.ltr,
                 keyboardType: TextInputType.multiline,
                 onChanged: (_) => _saveDraft(),
@@ -390,43 +398,20 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                   hintText: '12345\tخصم\t50',
                   hintTextDirection: TextDirection.ltr,
                   isDense: true,
-                  contentPadding: const EdgeInsets.all(10),
+                  filled: true,
+                  fillColor: Tw.slate50,
+                  contentPadding: const EdgeInsets.all(12),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                     borderSide: const BorderSide(color: Tw.slate200),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                     borderSide: const BorderSide(color: Tw.slate200),
                   ),
                 ),
               ),
-              const SizedBox(height: 4),
-              const Text.rich(
-                TextSpan(
-                  style: TextStyle(fontSize: 10.5, color: Tw.slate500),
-                  children: [
-                    TextSpan(text: 'للخصم الكامل: '),
-                    TextSpan(
-                      text: '12345  خصم كامل',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              const NoticeBox(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Text(
-                  'إذا جاء نفس الرقم بإضافة وخصم في القائمة نفسها، تُجمع عملياته أولًا في تسوية واحدة (الإضافات ناقص الخصومات) ثم تُطبَّق مرة واحدة، ويُكتب في عمود الحالة «تم خصم …» أو «تم اضافة …» مع تفاصيل التسوية.',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: Tw.slate600,
-                    height: 1.6,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
               ErpButton(
                 label: 'معالجة القائمة',
                 icon: FontAwesomeIcons.play,
@@ -440,12 +425,12 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                 _jobBox(job),
               ],
               if (_last != null && !busy) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 ErpButton(
                   label: 'عرض نتائج آخر معالجة',
                   icon: FontAwesomeIcons.clipboardList,
                   kind: ErpButtonKind.outline,
-                  height: 40,
+                  height: 42,
                   fontSize: 12.5,
                   onPressed: () => _showResults(_last!),
                 ),
@@ -465,25 +450,29 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            waiting
-                ? 'المعالجة متوقفة مؤقتًا — بانتظار الاتصال'
-                : 'جاري المعالجة… يتم تحديث جدول البيانات',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: waiting ? Tw.amber900 : Tw.sky800,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  waiting
+                      ? 'المعالجة متوقفة مؤقتًا — بانتظار الاتصال'
+                      : 'جاري المعالجة… يتم تحديث جدول البيانات',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: waiting ? Tw.amber900 : Tw.sky800,
+                  ),
+                ),
+              ),
+              const InfoTip(
+                'يمكنك إغلاق التطبيق: تكمل المعالجة في الخلفية، وإذا انقطع الإنترنت تُستأنف دون تكرار أي إضافة أو خصم.',
+                title: 'العمل في الخلفية',
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
           Text(
             job.progress ?? '',
             style: const TextStyle(fontSize: 12, color: Tw.slate600),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'يمكنك إغلاق التطبيق: تكمل المعالجة في الخلفية، وإذا انقطع الإنترنت تُستأنف دون تكرار أي إضافة أو خصم.',
-            style: TextStyle(fontSize: 11, color: Tw.slate500, height: 1.6),
           ),
           if (waiting) ...[
             const SizedBox(height: 8),

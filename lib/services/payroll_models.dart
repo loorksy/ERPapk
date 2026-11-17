@@ -382,7 +382,11 @@ class UnmentionedOptions {
     this.idCols = const ['A'],
     this.labelCols = const ['E'],
     this.shareCol = 'W',
+    this.color = '#f97316',
   });
+
+  /// Colour of the pulled management rows and of their copies.
+  final String color;
 
   /// Written in the title column (it routes the copy to the sheet of the
   /// same name in the management spreadsheet) and in [labelCols].
@@ -404,6 +408,7 @@ class UnmentionedOptions {
     'idCols': idCols,
     'labelCols': labelCols,
     'shareCol': shareCol,
+    'color': color,
   };
 
   static UnmentionedOptions fromJson(Object? j) {
@@ -416,6 +421,7 @@ class UnmentionedOptions {
       idCols: list(j['idCols'], const ['A']),
       labelCols: list(j['labelCols'], const ['E']),
       shareCol: (j['shareCol'] as String?) ?? 'W',
+      color: (j['color'] as String?) ?? '#f97316',
     );
   }
 }

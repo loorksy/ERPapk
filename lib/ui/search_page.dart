@@ -17,6 +17,7 @@ import '../erp/payroll_audit_engine.dart';
 import '../services/search_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'ui_kit.dart';
 
 /// ERP «البحث والتدقيق» page (`views/partials/search.ejs`).
 class SearchPage extends StatefulWidget {
@@ -248,17 +249,10 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
     children: [
-      const PageHeading(
-        icon: FontAwesomeIcons.magnifyingGlass,
-        title: 'البحث والتدقيق',
-        subtitle:
-            'استعلام عن مستخدم في الدورة أو عبر كل الدورات — بنفس أسلوب واجهة النظام',
-      ),
-      const SizedBox(height: 24),
       _criteria(),
-      if (_outcome != null) ...[const SizedBox(height: 24), _resultCard()],
+      if (_outcome != null) ...[gap, _resultCard()],
     ],
   );
 
@@ -302,13 +296,16 @@ class _SearchPageState extends State<SearchPage> {
     ),
   );
 
-  Widget _criteria() => ErpCard(
+  Widget _criteria() => Panel(
+    title: 'معايير البحث',
+    icon: FontAwesomeIcons.magnifyingGlass,
+    info:
+        'استعلام عن مستخدم برقمه في الدورة المختارة، أو في كل الدورات مع «البحث الشامل». يقرأ البحث آخر مزامنة للدورة (من التدقيق أو المزامنة التلقائية). «خصم %» يُطبَّق على الراتب المعروض. من النتيجة يمكن التدقيق الانتقائي لمستخدم واحد ونسخ البطاقة أو حفظها كصورة.',
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sectionHeader(FontAwesomeIcons.sliders, 'معايير البحث'),
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.zero,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -629,13 +626,23 @@ class _SearchPageState extends State<SearchPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'خيارات التدقيق الانتقائي',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Tw.slate800,
-            ),
+          const Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'خيارات التدقيق الانتقائي',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Tw.slate800,
+                  ),
+                ),
+              ),
+              InfoTip(
+                'اختر ورقة في جدول الإدارة أو اكتب اسماً لإنشاء ورقة جديدة في الدورة الحالية. يُلحق صف المستخدم بالورقة ويُلوَّن، وتُلوَّن صفوفه الأصلية في الإدارة والوكيل، وتُسجَّل حالته «تدقيق من أداة البحث».',
+                title: 'التدقيق الانتقائي',
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           const FieldLabel(
@@ -678,11 +685,6 @@ class _SearchPageState extends State<SearchPage> {
             loadingLabel: 'جاري التنفيذ...',
             fontSize: 13,
             onPressed: _execute,
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'اختر ورقة في جدول الإدارة أو اكتب اسماً لإنشاء ورقة جديدة في الدورة الحالية.',
-            style: TextStyle(fontSize: 11, color: Tw.slate500),
           ),
         ],
       ),

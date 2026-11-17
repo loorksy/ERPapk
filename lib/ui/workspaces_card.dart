@@ -7,6 +7,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../app_services.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
+import 'ui_kit.dart';
 import 'shell.dart';
 
 /// Asks for a workspace name (new workspace or rename).
@@ -131,28 +132,19 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
     final services = AppScope.of(context);
     final host = services.host;
     final activeId = services.workspace.id;
-    return ErpCard(
+    return Panel(
+      title: 'مساحات العمل',
+      icon: FontAwesomeIcons.briefcase,
+      info:
+          'لكل مساحة عمل دوراتها وتدقيقها وإعداداتها وأعمدتها، منفصلة تمامًا عن غيرها (مثلًا شركة ثانية). حساب Google مشترك بين كل المساحات. التنقل بينها من القائمة في البار العلوي.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SettingsCardHeader(
-            icon: FontAwesomeIcons.briefcase,
-            title: 'مساحات العمل',
-          ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.zero,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'لكل مساحة عمل دوراتها وتدقيقها وإعداداتها وأعمدتها، منفصلة تمامًا عن غيرها (مثلًا شركة ثانية). حساب Google مشترك بين كل المساحات.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: Tw.slate600,
-                    height: 1.7,
-                  ),
-                ),
-                const SizedBox(height: 12),
                 for (final w in host.workspaces)
                   Container(
                     margin: const EdgeInsets.only(bottom: 8),
@@ -259,44 +251,4 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
       ),
     );
   }
-}
-
-/// Header strip of a settings card (same look as the Google Sheets card).
-class SettingsCardHeader extends StatelessWidget {
-  const SettingsCardHeader({
-    super.key,
-    required this.icon,
-    required this.title,
-    this.color = Tw.indigo600,
-  });
-  final FaIconData icon;
-  final String title;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.centerRight,
-        end: Alignment.centerLeft,
-        colors: [Tw.slate50, Colors.white],
-      ),
-      border: Border(bottom: BorderSide(color: Tw.slate100)),
-    ),
-    child: Row(
-      children: [
-        FaIcon(icon, size: 13, color: color),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: Tw.slate800,
-          ),
-        ),
-      ],
-    ),
-  );
 }

@@ -9,7 +9,7 @@ import '../data/app_database.dart';
 import '../erp/normalize.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
-import 'workspaces_card.dart';
+import 'ui_kit.dart';
 
 /// Settings → the columns of the open workspace (owner's request,
 /// 2026-11-17). Defaults are the columns the app always used; saving them
@@ -67,6 +67,7 @@ class _ColumnsCardState extends State<ColumnsCard> {
     String? agentSalaryCol,
     String? agentNameCol,
     String? mgmtShareCol,
+    String? unmentionedColor,
   }) {
     final c = _c!;
     return WorkspaceColumns(
@@ -82,6 +83,7 @@ class _ColumnsCardState extends State<ColumnsCard> {
       unmentionedLabel: c.unmentionedLabel,
       unmentionedIdCols: c.unmentionedIdCols,
       unmentionedLabelCols: c.unmentionedLabelCols,
+      unmentionedColor: unmentionedColor ?? c.unmentionedColor,
     );
   }
 
@@ -112,6 +114,7 @@ class _ColumnsCardState extends State<ColumnsCard> {
       unmentionedLabel: label.isEmpty ? 'غير مذكور' : label,
       unmentionedIdCols: idCols,
       unmentionedLabelCols: labelCols,
+      unmentionedColor: c.unmentionedColor,
     );
     final problem = next.validate();
     if (problem != null) {
@@ -180,131 +183,112 @@ class _ColumnsCardState extends State<ColumnsCard> {
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
     final c = _c;
-    return ErpCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SettingsCardHeader(
-            icon: FontAwesomeIcons.tableColumns,
-            title: 'أعمدة «${services.workspace.name}»',
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child:
-                c == null
-                    ? const Center(child: CircularProgressIndicator())
-                    : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Text(
-                          'الأعمدة الافتراضية لهذه المساحة. تُطبَّق على صفحة التدقيق عند الحفظ، ويمكن تغييرها في أي وقت.',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            color: Tw.slate600,
-                            height: 1.7,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        _group('جدول معلومات المستخدمين'),
-                        _pick(
-                          'رقم المستخدم',
-                          c.userInfoUserIdCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoUserIdCol: v)),
-                        ),
-                        _pick(
-                          'اسم الوكالة (اسم ورقة الوجهة)',
-                          c.userInfoTitleCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoTitleCol: v)),
-                        ),
-                        _pick(
-                          'الراتب (يُكتب)',
-                          c.userInfoSalaryCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoSalaryCol: v)),
-                        ),
-                        _pick(
-                          'الحالة (يُكتب)',
-                          c.userInfoStatusCol,
-                          (v) =>
-                              setState(() => _c = _with(userInfoStatusCol: v)),
-                          allowAuto: true,
-                        ),
-                        _group('ورقة الإدارة'),
-                        _pick(
-                          'رقم المستخدم',
-                          c.mgmtUserIdCol,
-                          (v) => setState(() => _c = _with(mgmtUserIdCol: v)),
-                        ),
-                        _pick(
-                          'مبلغ الوكيل الفرعي',
-                          c.mgmtShareCol,
-                          (v) => setState(() => _c = _with(mgmtShareCol: v)),
-                        ),
-                        _group('ورقة الوكيل'),
-                        _pick(
-                          'رقم المستخدم',
-                          c.agentUserIdCol,
-                          (v) => setState(() => _c = _with(agentUserIdCol: v)),
-                        ),
-                        _pick(
-                          'الراتب',
-                          c.agentSalaryCol,
-                          (v) => setState(() => _c = _with(agentSalaryCol: v)),
-                        ),
-                        _pick(
-                          'الاسم',
-                          c.agentNameCol,
-                          (v) => setState(() => _c = _with(agentNameCol: v)),
-                        ),
-                        _group('غير المذكورين'),
-                        const FieldLabel('النص (واسم الورقة في جدول الإدارة)'),
-                        ErpTextField(controller: _label, maxLength: 60),
-                        const SizedBox(height: 10),
-                        const FieldLabel(
-                          'أعمدة إضافية يُكتب فيها رقم المستخدم',
-                        ),
-                        ErpTextField(controller: _idCols, hint: 'A', ltr: true),
-                        const SizedBox(height: 10),
-                        const FieldLabel('أعمدة إضافية يُكتب فيها النص'),
-                        ErpTextField(
-                          controller: _labelCols,
-                          hint: 'E',
-                          ltr: true,
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'عند «تدقيق غير المذكورين» يُكتب الرقم في عمود رقم المستخدم وفي هذه الأعمدة، والنص في عمود اسم الوكالة وفي أعمدة النص.',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: Tw.slate500,
-                            height: 1.6,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        ErpButton(
-                          label: 'حفظ الأعمدة',
-                          icon: FontAwesomeIcons.floppyDisk,
-                          kind: ErpButtonKind.indigo,
-                          height: 42,
-                          loading: _saving,
-                          onPressed: _save,
-                        ),
-                        const SizedBox(height: 8),
-                        ErpButton(
-                          label: 'استعادة الأعمدة الافتراضية',
-                          icon: FontAwesomeIcons.arrowRotateLeft,
-                          kind: ErpButtonKind.outline,
-                          height: 40,
-                          fontSize: 12.5,
-                          onPressed: () => _show(const WorkspaceColumns()),
-                        ),
-                      ],
-                    ),
-          ),
-        ],
+    return CollapsiblePanel(
+      title: 'أعمدة «${services.workspace.name}»',
+      icon: FontAwesomeIcons.tableColumns,
+      info:
+          'الأعمدة الافتراضية لهذه المساحة. تُطبَّق على صفحة التدقيق عند الحفظ، ويمكن تغييرها في أي وقت.\n\nعند «تدقيق غير المذكورين» يُكتب الرقم في عمود رقم المستخدم وفي «أعمدة الرقم الإضافية»، والنص في عمود اسم الوكالة وفي «أعمدة النص الإضافية».',
+      summary: SummaryText(
+        c == null
+            ? ''
+            : 'المستخدم ${c.userInfoUserIdCol} · الوكالة ${c.userInfoTitleCol} · الراتب ${c.userInfoSalaryCol} · الوكيل الفرعي ${c.mgmtShareCol}',
       ),
+      child:
+          c == null
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 8),
+                  _group('جدول معلومات المستخدمين'),
+                  _pick(
+                    'رقم المستخدم',
+                    c.userInfoUserIdCol,
+                    (v) => setState(() => _c = _with(userInfoUserIdCol: v)),
+                  ),
+                  _pick(
+                    'اسم الوكالة (اسم ورقة الوجهة)',
+                    c.userInfoTitleCol,
+                    (v) => setState(() => _c = _with(userInfoTitleCol: v)),
+                  ),
+                  _pick(
+                    'الراتب (يُكتب)',
+                    c.userInfoSalaryCol,
+                    (v) => setState(() => _c = _with(userInfoSalaryCol: v)),
+                  ),
+                  _pick(
+                    'الحالة (يُكتب)',
+                    c.userInfoStatusCol,
+                    (v) => setState(() => _c = _with(userInfoStatusCol: v)),
+                    allowAuto: true,
+                  ),
+                  _group('ورقة الإدارة'),
+                  _pick(
+                    'رقم المستخدم',
+                    c.mgmtUserIdCol,
+                    (v) => setState(() => _c = _with(mgmtUserIdCol: v)),
+                  ),
+                  _pick(
+                    'مبلغ الوكيل الفرعي',
+                    c.mgmtShareCol,
+                    (v) => setState(() => _c = _with(mgmtShareCol: v)),
+                  ),
+                  _group('ورقة الوكيل'),
+                  _pick(
+                    'رقم المستخدم',
+                    c.agentUserIdCol,
+                    (v) => setState(() => _c = _with(agentUserIdCol: v)),
+                  ),
+                  _pick(
+                    'الراتب',
+                    c.agentSalaryCol,
+                    (v) => setState(() => _c = _with(agentSalaryCol: v)),
+                  ),
+                  _pick(
+                    'الاسم',
+                    c.agentNameCol,
+                    (v) => setState(() => _c = _with(agentNameCol: v)),
+                  ),
+                  _group('غير المذكورين'),
+                  const FieldLabel('النص (واسم الورقة في جدول الإدارة)'),
+                  ErpTextField(controller: _label, maxLength: 60),
+                  const SizedBox(height: 10),
+                  const FieldLabel('أعمدة إضافية يُكتب فيها رقم المستخدم'),
+                  ErpTextField(controller: _idCols, hint: 'A', ltr: true),
+                  const SizedBox(height: 10),
+                  const FieldLabel('أعمدة إضافية يُكتب فيها النص'),
+                  ErpTextField(controller: _labelCols, hint: 'E', ltr: true),
+                  const SizedBox(height: 12),
+                  const FieldHeader(
+                    'لون صفوف الإدارة غير الملوّنة',
+                    info:
+                        'لون الصفوف التي تنقلها أداة «٢. سحب صفوف الإدارة غير الملوّنة»: تُلوَّن به في ورقة الإدارة وفي ورقة «غير مذكور» (هذه الصفوف فقط) لتمييزها. لا يظهر في صفحة التدقيق.',
+                  ),
+                  ColorField(
+                    value: c.unmentionedColor,
+                    onChanged:
+                        (v) => setState(() => _c = _with(unmentionedColor: v)),
+                  ),
+                  const SizedBox(height: 16),
+                  ErpButton(
+                    label: 'حفظ الأعمدة',
+                    icon: FontAwesomeIcons.floppyDisk,
+                    kind: ErpButtonKind.indigo,
+                    height: 42,
+                    loading: _saving,
+                    onPressed: _save,
+                  ),
+                  const SizedBox(height: 8),
+                  ErpButton(
+                    label: 'استعادة الأعمدة الافتراضية',
+                    icon: FontAwesomeIcons.arrowRotateLeft,
+                    kind: ErpButtonKind.outline,
+                    height: 40,
+                    fontSize: 12.5,
+                    onPressed: () => _show(const WorkspaceColumns()),
+                  ),
+                ],
+              ),
     );
   }
 }

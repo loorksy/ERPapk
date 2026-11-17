@@ -12,6 +12,7 @@ import '../google/sheets_client.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'spreadsheet_link.dart';
+import 'ui_kit.dart';
 
 const _months = [
   'يناير',
@@ -166,26 +167,27 @@ class _SheetPageState extends State<SheetPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
         children: [
-          PageHeading(
-            icon: FontAwesomeIcons.fileExcel,
+          ActionWithInfo(
             title: 'الدورات المالية',
-            subtitle: 'إدارة دورات الإدارة والوكيل — بنفس أسلوب واجهة النظام',
-            trailing: ErpButton(
+            info:
+                'الدورة المالية تجمع جدول الإدارة وجدول الوكيل (من Google Sheets أو من ملفات Excel / CSV). اختر الدورة في «تدقيق راتب» لتدقيق الرواتب عليها. اسحب للأسفل للتحديث.',
+            button: ErpButton(
               label: 'إنشاء دورة جديدة',
               icon: FontAwesomeIcons.plus,
               onPressed: () => _openModal(),
             ),
           ),
-          const SizedBox(height: 24),
+          gap,
           if (cycles == null)
             const Padding(
               padding: EdgeInsets.all(40),
               child: Center(child: CircularProgressIndicator()),
             )
           else if (cycles.isEmpty)
-            ErpCard(
+            Container(
+              decoration: panelDecoration(),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   vertical: 56,
@@ -235,7 +237,7 @@ class _SheetPageState extends State<SheetPage> {
           else
             for (var i = 0; i < cycles.length; i++)
               Padding(
-                padding: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.only(bottom: 12),
                 child: _card(cycles[i], i),
               ),
         ],
@@ -245,105 +247,85 @@ class _SheetPageState extends State<SheetPage> {
 
   Widget _card(Cycle c, int i) {
     final g = _gradients[i % _gradients.length];
-    return ErpCard(
+    return Container(
+      decoration: panelDecoration(),
+      padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            height: 4,
-            decoration: BoxDecoration(gradient: LinearGradient(colors: g)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(13),
+                  gradient: LinearGradient(colors: g),
+                ),
+                alignment: Alignment.center,
+                child: const FaIcon(
+                  FontAwesomeIcons.fileExcel,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        c.name.isEmpty ? 'دورة' : c.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Tw.slate900,
-                        ),
+                    Text(
+                      c.name.isEmpty ? 'دورة' : c.name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Tw.slate900,
                       ),
                     ),
-                    _iconBtn(
-                      FontAwesomeIcons.penToSquare,
-                      Tw.indigo600,
-                      Tw.indigo50,
-                      () => _openModal(c),
-                      'تعديل',
-                    ),
-                    _iconBtn(
-                      FontAwesomeIcons.trashCan,
-                      Tw.red600,
-                      Tw.red50,
-                      () => _confirmDelete(c),
-                      'حذف',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const FaIcon(
-                      FontAwesomeIcons.calendar,
-                      size: 13,
-                      color: Tw.slate400,
-                    ),
-                    const SizedBox(width: 8),
+                    const SizedBox(height: 2),
                     Text(
                       formatArabicDate(c.createdAt),
-                      style: const TextStyle(fontSize: 14, color: Tw.slate600),
+                      style: const TextStyle(fontSize: 12, color: Tw.slate500),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    c.linkedToGoogle ? ErpBadge.google() : ErpBadge.local(),
-                    if (c.auditClosedAt != null)
-                      const ErpBadge(
-                        label: 'التدقيق مغلق',
-                        icon: FontAwesomeIcons.lock,
-                        bg: Tw.slate100,
-                        fg: Tw.slate700,
-                        border: Tw.slate200,
-                      ),
-                  ],
+              ),
+              _iconBtn(
+                FontAwesomeIcons.penToSquare,
+                Tw.indigo600,
+                Tw.indigo50,
+                () => _openModal(c),
+                'تعديل',
+              ),
+              _iconBtn(
+                FontAwesomeIcons.trashCan,
+                Tw.red600,
+                Tw.red50,
+                () => _confirmDelete(c),
+                'حذف',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              c.linkedToGoogle ? ErpBadge.google() : ErpBadge.local(),
+              if (c.auditClosedAt != null)
+                const Pill('التدقيق مغلق', icon: FontAwesomeIcons.lock),
+              if (c.transferDiscountPct > 0)
+                Pill(
+                  'خصم التحويل ${jsNumberToString(c.transferDiscountPct)}%',
+                  icon: FontAwesomeIcons.percent,
+                  bg: Tw.indigo50,
+                  fg: Tw.indigo800,
                 ),
-                if (c.transferDiscountPct > 0) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Text(
-                        'خصم التحويل:',
-                        style: TextStyle(fontSize: 12, color: Tw.slate600),
-                      ),
-                      const SizedBox(width: 8),
-                      ErpBadge(
-                        label: '${jsNumberToString(c.transferDiscountPct)}%',
-                        icon: FontAwesomeIcons.percent,
-                        bg: Tw.indigo50,
-                        fg: Tw.indigo800,
-                        border: Tw.indigo200,
-                      ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Text(
-                  'الإدارة: ${c.managementCount} صف · الوكيل: ${c.agentCount} صف',
-                  style: const TextStyle(fontSize: 12, color: Tw.slate500),
-                ),
-              ],
-            ),
+              Pill(
+                'الإدارة ${c.managementCount} · الوكيل ${c.agentCount} صف',
+                icon: FontAwesomeIcons.layerGroup,
+              ),
+            ],
           ),
         ],
       ),
@@ -748,6 +730,10 @@ class _CycleModalState extends State<CycleModal> {
                   ),
                 ),
               ),
+              const InfoTip(
+                'Google Sheets: اختر جدول وورقة الإدارة وجدول وورقة الوكيل من حسابك (أو الصق رابط الجدول)، ثم «جلب البيانات». رفع ملفات: اختر ملفي Excel أو CSV للإدارة والوكيل. بعد القراءة اكتب اسم الدورة واحفظ.',
+                title: 'إنشاء دورة مالية',
+              ),
             ],
           ),
         ),
@@ -814,23 +800,6 @@ class _CycleModalState extends State<CycleModal> {
   );
 
   List<Widget> _googlePanel() => [
-    const NoticeBox(
-      bg: Tw.indigo50,
-      border: Tw.indigo200,
-      child: Row(
-        children: [
-          FaIcon(FontAwesomeIcons.cloud, size: 12, color: Tw.indigo600),
-          SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'اختر الجداول من حسابك في Google Sheets',
-              style: TextStyle(fontSize: 12, color: Tw.indigo900),
-            ),
-          ),
-        ],
-      ),
-    ),
-    const SizedBox(height: 12),
     _sourceBox(
       title: 'الإدارة',
       icon: FontAwesomeIcons.building,
@@ -1050,17 +1019,16 @@ class _CycleModalState extends State<CycleModal> {
           thick: true,
         ),
         const SizedBox(height: 12),
-        const FieldLabel('نسبة الخصم (%)', small: true, bold: true),
+        const FieldHeader(
+          'نسبة الخصم (%)',
+          info:
+              'تُحفظ مع الدورة كما في النظام. خصم التدقيق نفسه يُحدَّد من صفحة تدقيق الرواتب.',
+        ),
         ErpTextField(
           controller: _discount,
           hint: '0',
           thick: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'تُحفظ مع الدورة كما في النظام. خصم التدقيق نفسه يُحدَّد من صفحة تدقيق الرواتب.',
-          style: TextStyle(fontSize: 11, color: Tw.slate500, height: 1.5),
         ),
       ],
     ),

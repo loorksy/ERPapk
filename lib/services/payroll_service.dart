@@ -316,6 +316,8 @@ class PayrollService {
       case 'appendUserInfo':
         final n = (step['rows'] as List).length;
         return '2/2 إضافة $n رقم إلى جدول معلومات المستخدمين...';
+      case 'colorTargetIds':
+        return '2/2 تلوين الصفوف المنسوخة في ورقة «${step['sheet']}»...';
       case 'finish':
       case 'finishMerge':
         return '2/2 حفظ النتائج...';
@@ -338,6 +340,10 @@ class PayrollService {
     }
     if (kind == 'appendUserInfo') {
       await _appendUserInfoStep(step);
+      return;
+    }
+    if (kind == 'colorTargetIds') {
+      await _colorTargetIds(step, plan);
       return;
     }
     // Light record (links and sheet names); the data only where needed.
@@ -1077,10 +1083,19 @@ class PayrollService {
         'names': [sheetName],
       },
       {'k': 'copy', 'sheet': sheetName, 'idCol': idCol, 'rows': rows},
+      // Owner's request: their own colour (Settings), on the source rows
+      // and on these copies only, to tell them apart.
+      {
+        'k': 'colorTargetIds',
+        'sheet': sheetName,
+        'idCol': idCol,
+        'ids': [for (final r in rows) normalizeUserId(cellAt(r, idCol))],
+        'color': opts.color,
+      },
       {
         'k': 'color',
         'sheetOf': 'management',
-        'rows': {for (final i in rowIndices) '$i': req.managementColor},
+        'rows': {for (final i in rowIndices) '$i': opts.color},
       },
       {'k': 'finishMerge'},
     ];
@@ -1106,7 +1121,7 @@ class PayrollService {
         result: PayrollResult(
           success: true,
           message:
-              'نُقل ${rows.length} صف من ورقة الإدارة إلى ورقة «$sheetName» ولُوّنت بلون الإدارة',
+              'نُقل ${rows.length} صف من ورقة الإدارة إلى ورقة «$sheetName» ولُوّنت بلون غير المذكورين',
           applied: true,
           spreadsheetUrl: mgmtMeta.url,
           results: results,
@@ -1194,6 +1209,48 @@ class PayrollService {
           rows.sublist(i, end),
         ),
       );
+    }
+  }
+
+  /// Colours, in a target sheet of the management spreadsheet, the rows of
+  /// the given ids only (rows copied there by other steps keep theirs).
+  /// Repeating it colours the same rows again.
+  Future<void> _colorTargetIds(
+    Map<String, Object?> step,
+    AuditPlan plan,
+  ) async {
+    final info = await db.getCycleInfo(plan.cycleId);
+    final ss = info?.managementSpreadsheetId;
+    if (ss == null) return;
+    final sheets = sheetsProvider();
+    final name = step['sheet'] as String;
+    final idCol = (step['idCol'] as num).toInt();
+    final ids = {for (final x in (step['ids'] as List)) x.toString()};
+    final color = step['color'] as String;
+    final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ss));
+    final sheetId = getSheetIdByTitle(meta, name);
+    if (sheetId == null) return;
+    final rows = await withSheetsRetry(
+      () => sheets.valuesGet(ss, rangeWholeSheet(name)),
+    );
+    final byRow = <int, String>{
+      for (var i = 0; i < rows.length; i++)
+        if (ids.contains(normalizeUserId(cellAt(rows[i], idCol)))) i: color,
+    };
+    if (byRow.isEmpty) return;
+    final requests = mergedColorRequests(
+      sheetId,
+      byRow,
+      colorEndColumn(meta, sheetId),
+    );
+    for (var i = 0; i < requests.length; i += colorBatchSize) {
+      final chunk = requests.sublist(
+        i,
+        i + colorBatchSize > requests.length
+            ? requests.length
+            : i + colorBatchSize,
+      );
+      await withSheetsRetry(() => sheets.batchUpdate(ss, chunk));
     }
   }
 

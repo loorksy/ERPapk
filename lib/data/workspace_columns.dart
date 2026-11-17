@@ -18,7 +18,12 @@ class WorkspaceColumns {
     this.unmentionedLabel = 'غير مذكور',
     this.unmentionedIdCols = const ['A'],
     this.unmentionedLabelCols = const ['E'],
+    this.unmentionedColor = defaultUnmentionedColor,
   });
+
+  /// Orange: different from the agent (violet) and management (yellow)
+  /// colours of the audit.
+  static const defaultUnmentionedColor = '#f97316';
 
   /// User-info sheet: user id (ERP column C).
   final String userInfoUserIdCol;
@@ -55,6 +60,10 @@ class WorkspaceColumns {
   /// User-info columns that also receive [unmentionedLabel] (E).
   final List<String> unmentionedLabelCols;
 
+  /// Colour of the management rows pulled to «غير مذكور» (in the
+  /// management sheet and on their copies), owner's request 2026-11-17.
+  final String unmentionedColor;
+
   static const storageKey = 'workspaceColumnsV1';
 
   Map<String, Object?> toJson() => {
@@ -70,6 +79,7 @@ class WorkspaceColumns {
     'unmentionedLabel': unmentionedLabel,
     'unmentionedIdCols': unmentionedIdCols,
     'unmentionedLabelCols': unmentionedLabelCols,
+    'unmentionedColor': unmentionedColor,
   };
 
   static WorkspaceColumns fromJson(Object? j) {
@@ -108,7 +118,13 @@ class WorkspaceColumns {
         'unmentionedLabelCols',
         d.unmentionedLabelCols,
       ),
+      unmentionedColor: _color(j['unmentionedColor']),
     );
+  }
+
+  static String _color(Object? v) {
+    final s = v?.toString().trim().toLowerCase() ?? '';
+    return RegExp(r'^#[0-9a-f]{6}$').hasMatch(s) ? s : defaultUnmentionedColor;
   }
 
   /// Parses "A, E" into ["A", "E"]; null when a letter is invalid.

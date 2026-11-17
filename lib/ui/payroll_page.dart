@@ -22,6 +22,7 @@ import '../services/payroll_service.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
 import 'spreadsheet_link.dart';
+import 'ui_kit.dart';
 import 'unaudited_dialog.dart';
 
 const _draftKey = 'payrollAuditDraftV1';
@@ -722,7 +723,7 @@ class _PayrollPageState extends State<PayrollPage> {
       body:
           users
               ? 'سيُضاف كل رقم في ورقة الوكيل غير موجود في جدول معلومات المستخدمين مرة واحدة فقط (حتى لو له أكثر من راتب)، في صف جديد بعد آخر صف: الرقم في العمود $idCols، و«$label» في العمود $labelCols.\n\nثم تُدقق هذه الصفوف بنفس منطق التدقيق: تُنسخ صفوفها من ورقة الإدارة إلى ورقة «$label» (حسب عمود $_userInfoTitleCol)، ويُكتب الراتب والحالة، وتُلوّن. لا تتغير الصفوف الموجودة.'
-              : 'ستُنسخ صفوف ورقة الإدارة غير الملوّنة (غير المدققة) التي فيها مبلغ غير صفري في العمود ${ws.mgmtShareCol}، وصاحبها غير موجود في جدول معلومات المستخدمين، إلى ورقة «$label» في جدول الإدارة (تُنشأ إن لم تكن موجودة).\n\nتُلوّن الصفوف المنقولة بلون الإدارة حتى لا تُسحب مرة أخرى. يُفضّل تنفيذ «تدقيق غير المذكورين» قبلها.',
+              : 'ستُنسخ صفوف ورقة الإدارة غير الملوّنة (غير المدققة) التي فيها مبلغ غير صفري في العمود ${ws.mgmtShareCol}، وصاحبها غير موجود في جدول معلومات المستخدمين، إلى ورقة «$label» في جدول الإدارة (تُنشأ إن لم تكن موجودة).\n\nتُلوّن الصفوف المنقولة بلون غير المذكورين (من الإعدادات) في ورقة الإدارة وفي «$label»، حتى تتميز ولا تُسحب مرة أخرى. يُفضّل تنفيذ «تدقيق غير المذكورين» قبلها.',
       confirmLabel: users ? 'إضافة وتدقيق' : 'سحب الصفوف',
     );
     if (!ok || !mounted) return;
@@ -737,6 +738,7 @@ class _PayrollPageState extends State<PayrollPage> {
         idCols: ws.unmentionedIdCols,
         labelCols: ws.unmentionedLabelCols,
         shareCol: ws.mgmtShareCol,
+        color: ws.unmentionedColor,
       ),
     );
     if (!mounted) return;
@@ -876,6 +878,10 @@ class _PayrollPageState extends State<PayrollPage> {
                   ),
                 ),
               ),
+              const InfoTip(
+                'يمكنك إغلاق التطبيق: يكمل العمل في الخلفية، وإذا انقطع الإنترنت يستأنف من الخطوة التي توقف عندها (الإضافة، النسخ، الراتب والحالة، التلوين).',
+                title: 'العمل في الخلفية',
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -904,11 +910,6 @@ class _PayrollPageState extends State<PayrollPage> {
               style: const TextStyle(fontSize: 11.5, color: Tw.slate500),
             ),
           ],
-          const SizedBox(height: 8),
-          const Text(
-            'يمكنك إغلاق التطبيق: يكمل العمل في الخلفية، وإذا انقطع الإنترنت يستأنف من الخطوة التي توقف عندها (الإضافة، النسخ، الراتب والحالة، التلوين).',
-            style: TextStyle(fontSize: 11.5, color: Tw.slate500, height: 1.6),
-          ),
           if (waiting) ...[
             const SizedBox(height: 10),
             ErpButton(
@@ -1033,32 +1034,32 @@ class _PayrollPageState extends State<PayrollPage> {
   }
 
   // ------------------------------------------------------------------ UI
+  //
+  // Owner's redesign (2026-11-17): no page heading (the top bar names the
+  // page), details behind «!», and the column and colour options folded
+  // by default. Every control and action is the same as before.
 
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
     children: [
-      ErpCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _cycleSection(),
-            if (_optionsVisible) _optionsSection(),
-            _settingsSection(),
-            if (_optionsVisible && _cycleId.isNotEmpty) _toolsSection(),
-            if (_result != null) _resultsSection(),
-          ],
-        ),
-      ),
+      _cyclePanel(),
+      if (_optionsVisible) ...[gap, _sourcePanel(), gap, _columnsPanel()],
+      gap,
+      _settingsPanel(),
+      if (_optionsVisible && _cycleId.isNotEmpty) ...[gap, _toolsPanel()],
+      if (_result != null) ...[gap, _resultsPanel()],
     ],
   );
 
-  Widget _cycleSection() => CardSection(
-    top: false,
+  Widget _cyclePanel() => Panel(
+    title: 'الدورة المالية',
+    icon: FontAwesomeIcons.calendarDays,
+    info:
+        'اختر الدورة ثم اضغط «تحميل الدورة»: تُزامن جداول الإدارة والوكيل من Google (للدورات المرتبطة) وتظهر خيارات التدقيق.',
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const FieldLabel('الدورة المالية'),
         ErpSelect<String>(
           options:
               _cycles.isEmpty
@@ -1083,7 +1084,7 @@ class _PayrollPageState extends State<PayrollPage> {
             _saveDraft();
           },
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         ErpButton(
           label: 'تحميل الدورة',
           loadingLabel: 'جاري التحميل والمزامنة...',
@@ -1092,54 +1093,107 @@ class _PayrollPageState extends State<PayrollPage> {
           onPressed: _loadCycle,
         ),
         if (_cycles.isEmpty) ...[
-          const SizedBox(height: 12),
-          InkWell(
-            onTap: widget.onOpenSheet,
-            child: const NoticeBox(
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Text(
-                'لا توجد دورات. أنشئ دورة من قسم Sheet أولاً.',
-                style: TextStyle(fontSize: 12, color: Tw.slate600),
-              ),
-            ),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: widget.onOpenSheet,
+            icon: const FaIcon(FontAwesomeIcons.plus, size: 12),
+            label: const Text('لا توجد دورات — أنشئ دورة من Sheet'),
           ),
+        ],
+        if (_optionsVisible && _sessionClosed != null) ...[
+          const SizedBox(height: 12),
+          _sessionRow(),
         ],
       ],
     ),
   );
 
-  Widget _optionsSection() {
+  /// ERP «جلسة التدقيق»: one line with the state and the action.
+  Widget _sessionRow() {
+    final closed = _sessionClosed == true;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: closed ? Tw.slate50 : Tw.amber50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: closed ? Tw.slate200 : Tw.amber200),
+      ),
+      child: Row(
+        children: [
+          FaIcon(
+            closed ? FontAwesomeIcons.lock : FontAwesomeIcons.lockOpen,
+            size: 12,
+            color: closed ? Tw.slate500 : Tw.amber700,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              closed ? 'تم إغلاق التدقيق' : 'التدقيق نشط لهذه الدورة',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: closed ? Tw.slate700 : Tw.amber900,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => _setSession(!closed),
+            child: Text(
+              closed ? 'إعادة فتح' : 'إغلاق التدقيق',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: closed ? Tw.indigo600 : Tw.amber800,
+              ),
+            ),
+          ),
+          InfoTip(
+            closed
+                ? 'هذه الدورة مُعلَّمة كمغلقة على هذا الجهاز. يمكنك إعادة فتح الجلسة للمتابعة، أو متابعة العمل بدون تغيير الحالة.'
+                : 'يُحفظ اختيار الدورة والجدول والأعمدة في هذا الجهاز. استخدم «إغلاق التدقيق» عند الانتهاء من العمل على هذه الدورة.',
+            title: 'جلسة التدقيق',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sourcePanel() {
     final linked = _cycle?.linkedToGoogle ?? false;
     final isLocal = _spreadsheetId == _localSource;
-    return CardSection(
+    return Panel(
+      title: 'جدول معلومات المستخدمين',
+      icon: FontAwesomeIcons.table,
+      iconColor: Tw.emerald600,
+      iconBg: Tw.emerald50,
+      info:
+          '${isLocal
+              ? 'التدقيق يتم على الهاتف، والنتائج تُحفظ في ملف Excel يمكنك تصديره.'
+              : linked
+              ? 'مزامنة اللقطات ثم كتابة النتائج والألوان في Google — التدقيق يُحسب على الهاتف.'
+              : 'الدورة من ملفات محلية: التدقيق على Google يحتاج دورة مرتبطة بجداول Google كما في النظام؛ يمكنك التدقيق من ملف على الجهاز.'}\n\nربط Google اختياري: يمكنك التدقيق من ملف Excel / CSV على الجهاز، أو لصق رابط جدول Google.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_sessionClosed != null) ...[
-            _sessionBanner(),
-            const SizedBox(height: 24),
-          ],
-          const FieldLabel('جدول معلومات المستخدمين'),
           ErpSelect<String>(
             options: _sourceOptions(),
             value: _spreadsheetId,
             onChanged: _onSourceChanged,
           ),
           if (_ssMessage != null && !_ssMessage!.contains('جاري')) ...[
-            const SizedBox(height: 6),
-            InkWell(
-              onTap: widget.onOpenSettings,
-              child: const Text(
-                'ربط Google اختياري: يمكنك التدقيق من ملف على الجهاز، أو اربط الحساب من الإعدادات.',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: Tw.indigo600,
-                  height: 1.5,
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: widget.onOpenSettings,
+                icon: const FaIcon(FontAwesomeIcons.google, size: 12),
+                label: const Text(
+                  'ربط Google من الإعدادات',
+                  style: TextStyle(fontSize: 12.5),
                 ),
               ),
             ),
-          ],
-          const SizedBox(height: 12),
+          ] else
+            const SizedBox(height: 12),
           ErpButton(
             label: 'تدقيق',
             icon: FontAwesomeIcons.clipboardCheck,
@@ -1159,132 +1213,145 @@ class _PayrollPageState extends State<PayrollPage> {
             const SizedBox(height: 12),
             _jobPanel(_job!),
           ],
-          const SizedBox(height: 6),
-          Text(
-            isLocal
-                ? 'التدقيق يتم على الهاتف، والنتائج تُحفظ في ملف Excel يمكنك تصديره.'
-                : linked
-                ? 'مزامنة اللقطات ثم كتابة النتائج والألوان في Google — التدقيق يُحسب على الهاتف.'
-                : 'الدورة من ملفات محلية: التدقيق على Google يحتاج دورة مرتبطة بجداول Google كما في النظام؛ يمكنك التدقيق من ملف على الجهاز.',
-            style: const TextStyle(
-              fontSize: 11.5,
-              color: Tw.slate500,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 24),
-          const SectionCaption('أعمدة الدورة (الإدارة والوكيل)'),
-          _colSelect(
-            'رقم المستخدم — الإدارة',
-            _cycleMgmtCols,
-            _cycleMgmtUserIdCol,
-            (v) => setState(() => _cycleMgmtUserIdCol = v),
-          ),
-          const SizedBox(height: 12),
-          _colSelect(
-            'رقم المستخدم — الوكيل',
-            _cycleAgentCols,
-            _cycleAgentUserIdCol,
-            (v) => setState(() => _cycleAgentUserIdCol = v),
-          ),
-          const SizedBox(height: 12),
-          _colSelect(
-            'الراتب — الوكيل',
-            _cycleAgentCols,
-            _cycleAgentSalaryCol,
-            (v) => setState(() => _cycleAgentSalaryCol = v),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Divider(height: 1, color: Tw.slate100),
-          ),
-          const SectionCaption('ورقة وجدول معلومات المستخدمين'),
-          const FieldLabel('الورقة', small: true),
-          ErpSelect<String>(
-            muted: true,
-            options: [
-              const SelectOption('', 'أول ورقة'),
-              for (final s in _userInfoSheets) SelectOption(s, s),
-              if (_userInfoSheet.isNotEmpty &&
-                  !_userInfoSheets.contains(_userInfoSheet))
-                SelectOption(_userInfoSheet, _userInfoSheet),
-            ],
-            value: _userInfoSheet,
-            onChanged: (v) {
-              setState(() => _userInfoSheet = v);
-              if (_spreadsheetId.isNotEmpty) {
-                _loadUserInfoSheetsAndColumns(
-                  _spreadsheetId,
-                  v.isEmpty ? null : v,
-                );
-              }
-              _saveDraft();
-            },
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _colSelect(
-                  'رقم المستخدم',
-                  _userInfoCols,
-                  _userInfoUserIdCol,
-                  (v) => setState(() => _userInfoUserIdCol = v),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _colSelect(
-                  'اسم الورقة',
-                  _userInfoCols,
-                  _userInfoTitleCol,
-                  (v) => setState(() => _userInfoTitleCol = v),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _colSelect(
-                  'كتابة الراتب',
-                  _userInfoCols,
-                  _userInfoSalaryCol,
-                  (v) => setState(() => _userInfoSalaryCol = v),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const FieldLabel('الحالة (محاذي)', small: true),
-                    ErpSelect<String>(
-                      muted: true,
-                      options: [
-                        SelectOption(
-                          '',
-                          'تلقائي (${columnIndexToLetter((columnLetterToIndex(_userInfoSalaryCol) ?? 11) + 1)})',
-                        ),
-                        for (final c in _userInfoCols)
-                          SelectOption(c.letter, c.label),
-                      ],
-                      value: _userInfoStatusCol,
-                      onChanged: (v) {
-                        setState(() => _userInfoStatusCol = v);
-                        _saveDraft();
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
   }
+
+  String _statusColLabel() =>
+      _userInfoStatusCol.isEmpty
+          ? columnIndexToLetter(
+            (columnLetterToIndex(_userInfoSalaryCol) ?? 11) + 1,
+          )
+          : _userInfoStatusCol;
+
+  Widget _columnsPanel() => CollapsiblePanel(
+    title: 'الأعمدة والورقة',
+    icon: FontAwesomeIcons.tableColumns,
+    info:
+        'أعمدة رقم المستخدم والراتب في جدولي الإدارة والوكيل، وورقة جدول معلومات المستخدمين وأعمدته (رقم المستخدم، اسم الورقة/الوكالة، كتابة الراتب والحالة). القيم الافتراضية من الإعدادات ← أعمدة مساحة العمل.',
+    summary: SummaryText(
+      'الإدارة $_cycleMgmtUserIdCol · الوكيل $_cycleAgentUserIdCol · راتب الوكيل $_cycleAgentSalaryCol — المستخدم $_userInfoUserIdCol · الوكالة $_userInfoTitleCol · الراتب $_userInfoSalaryCol · الحالة ${_statusColLabel()}',
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _GroupTitle('الإدارة والوكيل'),
+        _colSelect(
+          'رقم المستخدم — الإدارة',
+          _cycleMgmtCols,
+          _cycleMgmtUserIdCol,
+          (v) => setState(() => _cycleMgmtUserIdCol = v),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _colSelect(
+                'رقم المستخدم — الوكيل',
+                _cycleAgentCols,
+                _cycleAgentUserIdCol,
+                (v) => setState(() => _cycleAgentUserIdCol = v),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _colSelect(
+                'الراتب — الوكيل',
+                _cycleAgentCols,
+                _cycleAgentSalaryCol,
+                (v) => setState(() => _cycleAgentSalaryCol = v),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        const _GroupTitle('معلومات المستخدمين'),
+        const FieldHeader('الورقة'),
+        ErpSelect<String>(
+          muted: true,
+          options: [
+            const SelectOption('', 'أول ورقة'),
+            for (final s in _userInfoSheets) SelectOption(s, s),
+            if (_userInfoSheet.isNotEmpty &&
+                !_userInfoSheets.contains(_userInfoSheet))
+              SelectOption(_userInfoSheet, _userInfoSheet),
+          ],
+          value: _userInfoSheet,
+          onChanged: (v) {
+            setState(() => _userInfoSheet = v);
+            if (_spreadsheetId.isNotEmpty) {
+              _loadUserInfoSheetsAndColumns(
+                _spreadsheetId,
+                v.isEmpty ? null : v,
+              );
+            }
+            _saveDraft();
+          },
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _colSelect(
+                'رقم المستخدم',
+                _userInfoCols,
+                _userInfoUserIdCol,
+                (v) => setState(() => _userInfoUserIdCol = v),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _colSelect(
+                'اسم الورقة',
+                _userInfoCols,
+                _userInfoTitleCol,
+                (v) => setState(() => _userInfoTitleCol = v),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _colSelect(
+                'كتابة الراتب',
+                _userInfoCols,
+                _userInfoSalaryCol,
+                (v) => setState(() => _userInfoSalaryCol = v),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const FieldHeader('الحالة (محاذي)'),
+                  ErpSelect<String>(
+                    muted: true,
+                    options: [
+                      SelectOption(
+                        '',
+                        'تلقائي (${columnIndexToLetter((columnLetterToIndex(_userInfoSalaryCol) ?? 11) + 1)})',
+                      ),
+                      for (final c in _userInfoCols)
+                        SelectOption(c.letter, c.label),
+                    ],
+                    value: _userInfoStatusCol,
+                    onChanged: (v) {
+                      setState(() => _userInfoStatusCol = v);
+                      _saveDraft();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 
   Widget _colSelect(
     String label,
@@ -1294,7 +1361,7 @@ class _PayrollPageState extends State<PayrollPage> {
   ) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      FieldLabel(label, small: true),
+      FieldHeader(label),
       ErpSelect<String>(
         muted: true,
         options: [for (final c in cols) SelectOption(c.letter, c.label)],
@@ -1307,157 +1374,38 @@ class _PayrollPageState extends State<PayrollPage> {
     ],
   );
 
-  Widget _sessionBanner() {
-    final closed = _sessionClosed == true;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xccfffbeb),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Tw.amber200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            closed ? 'تم إغلاق التدقيق' : 'التدقيق نشط لهذه الدورة',
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: Tw.amber950,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            closed
-                ? 'هذه الدورة مُعلَّمة كمغلقة على هذا الجهاز. يمكنك إعادة فتح الجلسة للمتابعة، أو متابعة العمل بدون تغيير الحالة.'
-                : 'يُحفظ اختيار الدورة والجدول والأعمدة في هذا الجهاز. استخدم «إغلاق التدقيق» عند الانتهاء من العمل على هذه الدورة.',
-            style: const TextStyle(
-              fontSize: 12,
-              height: 1.6,
-              color: Tw.amber900,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ErpButton(
-            label: closed ? 'إعادة فتح الجلسة' : 'إغلاق التدقيق',
-            kind: closed ? ErpButtonKind.slate : ErpButtonKind.amber,
-            height: 40,
-            fontSize: 12,
-            onPressed: () => _setSession(!closed),
-          ),
-          if (closed) ...[
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
-              child: Divider(height: 1, color: Tw.amber200),
-            ),
-            const SizedBox(height: 12),
-            const Row(
-              children: [
-                FaIcon(
-                  FontAwesomeIcons.circleCheck,
-                  size: 14,
-                  color: Tw.emerald800,
-                ),
-                SizedBox(width: 6),
-                Text(
-                  'تم إغلاق جلسة التدقيق لهذه الدورة.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Tw.emerald800,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// Owner's requests (2026-11-17), after a full or partial audit: the
-  /// read-only list of agent users not audited yet, then the two
-  /// «غير مذكور» steps. Nothing is shown until a button is pressed.
-  Widget _toolsSection() {
-    final busy = _running || (_job?.active ?? false);
-    final google = _spreadsheetId != _localSource;
-    final label = _ws.unmentionedLabel;
-    Widget hint(String text) => Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 14),
-      child: Text(
-        text,
-        style: const TextStyle(fontSize: 11.5, color: Tw.slate500, height: 1.6),
-      ),
-    );
-    return CardSection(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const SectionCaption('أدوات بعد التدقيق'),
-          ErpButton(
-            label: 'عرض غير المدققين في ورقة الوكيل',
-            icon: FontAwesomeIcons.userClock,
-            kind: ErpButtonKind.outline,
-            loading: _loadingPending,
-            loadingLabel: 'جاري التحميل...',
-            height: 42,
-            fontSize: 13,
-            onPressed: _showUnaudited,
-          ),
-          hint('قائمة للقراءة فقط: الرقم والاسم والعدد المتبقي، مع النسخ.'),
-          ErpButton(
-            label: '١. تدقيق غير المذكورين',
-            icon: FontAwesomeIcons.userPlus,
-            kind: ErpButtonKind.indigoSoft,
-            height: 42,
-            fontSize: 13,
-            onPressed:
-                busy || !google
-                    ? null
-                    : () => _runTool(JobKind.unmentionedUsers),
-          ),
-          hint(
-            'يضيف أرقام ورقة الوكيل غير الموجودة في جدول معلومات المستخدمين (مرة واحدة لكل رقم) بعنوان «$label» ثم يدققها بنفس المنطق.',
-          ),
-          ErpButton(
-            label: '٢. سحب صفوف الإدارة غير الملوّنة إلى «$label»',
-            icon: FontAwesomeIcons.fileImport,
-            kind: ErpButtonKind.indigoSoft,
-            height: 42,
-            fontSize: 13,
-            onPressed:
-                busy || !google
-                    ? null
-                    : () => _runTool(JobKind.unmentionedMgmt),
-          ),
-          hint(
-            'ينسخ صفوف الإدارة غير الملوّنة التي فيها مبلغ في العمود ${_ws.mgmtShareCol} فقط إلى ورقة «$label» (تُنشأ إن لم تكن موجودة).',
-          ),
-          if (!google)
-            const Text(
-              'الأداتان ١ و٢ تعملان على جداول Google فقط.',
-              style: TextStyle(fontSize: 11.5, color: Tw.amber700),
-            ),
-          if ((_job?.active ?? false) && _toolJob) _jobPanel(_job!),
-        ],
-      ),
-    );
-  }
-
-  Widget _settingsSection() => CardSection(
+  Widget _settingsPanel() => CollapsiblePanel(
+    title: 'الخصم والألوان',
+    icon: FontAwesomeIcons.palette,
+    iconColor: Tw.violet500,
+    iconBg: const Color(0xfff5f3ff),
+    info:
+        'نسبة الخصم تُطبَّق على راتب الوكيل عند التدقيق. لون الوكيل ولون الإدارة يُلوَّن بهما الصفوف المدققة في جدولي الإدارة والوكيل. «حفظ الإعدادات» يجعلها الافتراضي.',
+    summary: Row(
+      children: [
+        Text(
+          'خصم ${_discount.text.trim().isEmpty ? '0' : _discount.text.trim()}%',
+          style: const TextStyle(fontSize: 12, color: Tw.slate500),
+        ),
+        const SizedBox(width: 6),
+        ColorDot(hexColor(_agentColor)),
+        ColorDot(hexColor(_mgmtColor)),
+      ],
+    ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SectionCaption('الخصم والألوان'),
-        const FieldLabel('نسبة الخصم (%)'),
+        const FieldHeader('نسبة الخصم (%)'),
         ErpTextField(
           controller: _discount,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (_) => _saveDraft(),
+          onChanged: (_) {
+            setState(() {});
+            _saveDraft();
+          },
         ),
-        const SizedBox(height: 16),
-        const FieldLabel('لون الوكيل'),
+        const SizedBox(height: 12),
+        const FieldHeader('لون الوكيل'),
         ColorField(
           value: _agentColor,
           onChanged: (v) {
@@ -1465,8 +1413,8 @@ class _PayrollPageState extends State<PayrollPage> {
             _saveDraft();
           },
         ),
-        const SizedBox(height: 16),
-        const FieldLabel('لون الإدارة'),
+        const SizedBox(height: 12),
+        const FieldHeader('لون الإدارة'),
         ColorField(
           value: _mgmtColor,
           onChanged: (v) {
@@ -1474,41 +1422,116 @@ class _PayrollPageState extends State<PayrollPage> {
             _saveDraft();
           },
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         ErpButton(
           label: 'حفظ الإعدادات',
           icon: FontAwesomeIcons.floppyDisk,
           kind: ErpButtonKind.outline,
-          height: 40,
+          height: 42,
           onPressed: _saveSettings,
         ),
       ],
     ),
   );
 
-  Widget _resultsSection() => Container(
-    decoration: const BoxDecoration(
-      border: Border(top: BorderSide(color: Tw.slate200)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          color: Tw.slate50,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: const Text(
-            'نتيجة التدقيق',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: Tw.slate800,
+  /// Owner's requests (2026-11-17), after a full or partial audit: the
+  /// read-only list of agent users not audited yet, then the two
+  /// «غير مذكور» steps. Nothing is shown until a button is pressed.
+  Widget _toolsPanel() {
+    final busy = _running || (_job?.active ?? false);
+    final google = _spreadsheetId != _localSource;
+    final label = _ws.unmentionedLabel;
+    return Panel(
+      title: 'أدوات بعد التدقيق',
+      icon: FontAwesomeIcons.screwdriverWrench,
+      iconColor: Tw.amber700,
+      iconBg: Tw.amber50,
+      info:
+          'تعمل بعد تدقيق كامل أو جزئي. الأداتان ١ و٢ تكتبان على Google (بعد تأكيد) وتعملان في الخلفية مثل التدقيق، وتعملان على جداول Google فقط.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ActionWithInfo(
+            title: 'غير المدققين في ورقة الوكيل',
+            info:
+                'قائمة للقراءة فقط: أرقام ورقة الوكيل التي لم تُدقق بعد، مع الاسم والعدد المتبقي، والبحث والنسخ. لا تكتب شيئًا.',
+            button: ErpButton(
+              label: 'عرض غير المدققين في ورقة الوكيل',
+              icon: FontAwesomeIcons.userClock,
+              kind: ErpButtonKind.outline,
+              loading: _loadingPending,
+              loadingLabel: 'جاري التحميل...',
+              height: 44,
+              fontSize: 13,
+              onPressed: _showUnaudited,
             ),
           ),
-        ),
-        Padding(padding: const EdgeInsets.all(20), child: _resultContent()),
-      ],
-    ),
-  );
+          const SizedBox(height: 8),
+          ActionWithInfo(
+            title: 'تدقيق غير المذكورين',
+            info:
+                'يضيف أرقام ورقة الوكيل غير الموجودة في جدول معلومات المستخدمين (مرة واحدة لكل رقم) في صفوف جديدة بعد آخر صف، بعنوان «$label»، ثم يدققها بنفس منطق التدقيق: تُنسخ إلى ورقة «$label» في جدول الإدارة ويُكتب الراتب والحالة وتُلوّن.',
+            button: ErpButton(
+              label: '١. تدقيق غير المذكورين',
+              icon: FontAwesomeIcons.userPlus,
+              kind: ErpButtonKind.indigoSoft,
+              height: 44,
+              fontSize: 13,
+              onPressed:
+                  busy || !google
+                      ? null
+                      : () => _runTool(JobKind.unmentionedUsers),
+            ),
+          ),
+          const SizedBox(height: 8),
+          ActionWithInfo(
+            title: 'سحب صفوف الإدارة غير الملوّنة',
+            info:
+                'ينسخ صفوف الإدارة غير الملوّنة التي فيها مبلغ في العمود ${_ws.mgmtShareCol} فقط، وصاحبها غير موجود في جدول معلومات المستخدمين، إلى ورقة «$label» (تُنشأ إن لم تكن موجودة)، ويلوّنها بلون غير المذكورين من الإعدادات في ورقة الإدارة وفي «$label».',
+            button: ErpButton(
+              label: '٢. سحب صفوف الإدارة غير الملوّنة',
+              icon: FontAwesomeIcons.fileImport,
+              kind: ErpButtonKind.indigoSoft,
+              height: 44,
+              fontSize: 13,
+              onPressed:
+                  busy || !google
+                      ? null
+                      : () => _runTool(JobKind.unmentionedMgmt),
+            ),
+          ),
+          if (!google) ...[
+            const SizedBox(height: 8),
+            const Pill(
+              'الأداتان ١ و٢ لجداول Google فقط',
+              icon: FontAwesomeIcons.circleExclamation,
+              bg: Tw.amber50,
+              fg: Tw.amber800,
+            ),
+          ],
+          if ((_job?.active ?? false) && _toolJob) ...[
+            const SizedBox(height: 12),
+            _jobPanel(_job!),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _resultsPanel() {
+    final r = _result!;
+    return Panel(
+      title: 'نتيجة التدقيق',
+      icon: FontAwesomeIcons.clipboardList,
+      iconColor: Tw.emerald600,
+      iconBg: Tw.emerald50,
+      info:
+          r.localOnly
+              ? 'تدقيق على الهاتف فقط — لم تُكتب أي بيانات على Google. صدّر النتائج إلى Excel من الزر أدناه.'
+              : 'النتائج كما كُتبت في Google: النسخ إلى أوراق الوجهة، الراتب والحالة، والتلوين.',
+      child: _resultContent(),
+    );
+  }
 
   Widget _resultContent() {
     final r = _result;
@@ -1518,25 +1541,6 @@ class _PayrollPageState extends State<PayrollPage> {
     if (r.cycleSynced && !msg.contains('تمت مزامنة جداول الدورة')) {
       msg = 'تمت مزامنة جداول الدورة من Google ثم $msg';
     }
-    const base = TextStyle(fontSize: 14, color: Tw.slate600, height: 1.6);
-    Widget li(String label, int v) => Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text.rich(
-        TextSpan(
-          style: base,
-          children: [
-            TextSpan(text: '$label: '),
-            TextSpan(
-              text: '$v',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Tw.slate800,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
     final d = r.diagnostic;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1544,21 +1548,12 @@ class _PayrollPageState extends State<PayrollPage> {
         if (r.localOnly)
           const Padding(
             padding: EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                FaIcon(
-                  FontAwesomeIcons.mobileScreen,
-                  size: 11,
-                  color: Tw.slate500,
-                ),
-                SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    'تدقيق على الهاتف فقط — لم تُكتب أي بيانات على Google.',
-                    style: TextStyle(fontSize: 12, color: Tw.slate500),
-                  ),
-                ),
-              ],
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Pill(
+                'على الهاتف فقط',
+                icon: FontAwesomeIcons.mobileScreen,
+              ),
             ),
           ),
         Text(
@@ -1569,12 +1564,39 @@ class _PayrollPageState extends State<PayrollPage> {
             height: 1.6,
           ),
         ),
-        const SizedBox(height: 8),
         if (s != null) ...[
-          li('إجمالي الصفوف', s.total),
-          li('سحب وكالة', s.agent),
-          li('سحب إدارة', s.management),
-          li('غير موجود', s.notFound),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: StatTile(label: 'إجمالي الصفوف', value: '${s.total}'),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: StatTile(
+                  label: 'سحب وكالة',
+                  value: '${s.agent}',
+                  color: hexColor(_agentColor),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: StatTile(
+                  label: 'سحب إدارة',
+                  value: '${s.management}',
+                  color: Tw.amber600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: StatTile(
+                  label: 'غير موجود',
+                  value: '${s.notFound}',
+                  color: Tw.slate500,
+                ),
+              ),
+            ],
+          ),
         ],
         if (r.duplicates.isNotEmpty) ...[
           const SizedBox(height: 12),
@@ -1586,21 +1608,23 @@ class _PayrollPageState extends State<PayrollPage> {
           _samplesBox(r),
         ],
         if (r.spreadsheetUrl != null) ...[
-          const SizedBox(height: 12),
-          InkWell(
-            onTap:
-                () => launchUrl(
-                  Uri.parse(r.spreadsheetUrl!),
-                  mode: LaunchMode.externalApplication,
-                ),
-            child: Text(
-              r.summary == null
-                  ? 'فتح جدول الإدارة في Google ←'
-                  : 'فتح جدول معلومات المستخدمين في Google ←',
-              style: TextStyle(
-                fontSize: 14,
-                color: Tw.indigo600,
-                decoration: TextDecoration.underline,
+          const SizedBox(height: 8),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(
+              onPressed:
+                  () => launchUrl(
+                    Uri.parse(r.spreadsheetUrl!),
+                    mode: LaunchMode.externalApplication,
+                  ),
+              icon: const FaIcon(
+                FontAwesomeIcons.arrowUpRightFromSquare,
+                size: 12,
+              ),
+              label: Text(
+                r.summary == null
+                    ? 'فتح جدول الإدارة في Google'
+                    : 'فتح جدول معلومات المستخدمين في Google',
               ),
             ),
           ),
@@ -1616,7 +1640,7 @@ class _PayrollPageState extends State<PayrollPage> {
             onPressed: _export,
           ),
         ],
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
         _detailsList(r.results),
       ],
     );
@@ -1804,4 +1828,22 @@ class _PayrollPageState extends State<PayrollPage> {
       ),
     );
   }
+}
+
+/// A small heading inside a folded group.
+class _GroupTitle extends StatelessWidget {
+  const _GroupTitle(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w700,
+        color: Tw.indigo700,
+      ),
+    ),
+  );
 }

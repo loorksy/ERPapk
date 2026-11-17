@@ -82,15 +82,16 @@ class ErpCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     clipBehavior: clip ? Clip.antiAlias : Clip.none,
+    // Same look as the redesigned panels (ui_kit.dart).
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Tw.slate200),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: const Color(0xffe8ecf2)),
       boxShadow: const [
         BoxShadow(
-          color: Color(0x0f0f172a),
-          blurRadius: 3,
-          offset: Offset(0, 1),
+          color: Color(0x0a0f172a),
+          blurRadius: 12,
+          offset: Offset(0, 4),
         ),
       ],
     ),
@@ -120,77 +121,6 @@ class CardSection extends StatelessWidget {
     padding: padding,
     child: child,
   );
-}
-
-/// The gradient icon tile + title used at the top of ERP pages.
-class PageHeading extends StatelessWidget {
-  const PageHeading({
-    super.key,
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.trailing,
-  });
-  final FaIconData icon;
-  final String title;
-  final String? subtitle;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final heading = Row(
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            gradient: const LinearGradient(
-              colors: [Tw.indigo600, Tw.indigo500],
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x404f46e5),
-                blurRadius: 8,
-                offset: Offset(0, 3),
-              ),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: FaIcon(icon, color: Colors.white, size: 18),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Tw.slate900,
-                ),
-              ),
-              if (subtitle != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    subtitle!,
-                    style: const TextStyle(fontSize: 12, color: Tw.slate500),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-    if (trailing == null) return heading;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [heading, const SizedBox(height: 14), trailing!],
-    );
-  }
 }
 
 // ----------------------------------------------------------------- labels

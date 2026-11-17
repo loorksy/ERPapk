@@ -234,8 +234,9 @@ void main() {
       ]);
       expect(fake.colors['cyc|${mgmtSheetId()}'], {
         1: '#facc15',
-        5: '#facc15',
-        6: '#facc15',
+        // The owner's own colour for these rows (Settings), not management's.
+        5: '#f97316',
+        6: '#f97316',
       });
       expect((await resultOf(job)).message, contains('نُقل 2 صف'));
       expect(await db.auditedMemberIds(id), containsAll(['1005', '1006']));
@@ -259,6 +260,32 @@ void main() {
       '1005',
       '1006',
     ]);
+    // In «غير مذكور» only the pulled rows get their colour; 1002 (copied
+    // by the users step) is left as it was.
+    final target = fake.colors['cyc|${fake.ids['cyc']!['غير مذكور']}']!;
+    expect(target, {1: '#f97316', 2: '#f97316'});
+  });
+
+  test('the pulled rows use the colour chosen in Settings', () async {
+    final id = await linkedCycle();
+    final jobId = await db.createAuditJob(id, {
+      ...request(id).toJson(),
+      'kind': JobKind.unmentionedMgmt,
+      'unmentioned': const UnmentionedOptions(color: '#22c55e').toJson(),
+    });
+    await runner.runPending();
+    expect((await db.getAuditJob(jobId))!.status, AuditJob.done);
+    expect(fake.colors['cyc|${mgmtSheetId()}']![5], '#22c55e');
+    expect(
+      fake.colors['cyc|${fake.ids['cyc']!['غير مذكور']}']!.values.toSet(),
+      {'#22c55e'},
+    );
+    final ws = WorkspaceColumns.fromJson({'unmentionedColor': '#ABCDEF'});
+    expect(ws.unmentionedColor, '#abcdef');
+    expect(
+      WorkspaceColumns.fromJson({'unmentionedColor': 'red'}).unmentionedColor,
+      WorkspaceColumns.defaultUnmentionedColor,
+    );
   });
 
   test('an empty agency name sends the user to «غير مذكور»', () async {
