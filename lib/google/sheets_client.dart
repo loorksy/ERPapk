@@ -490,6 +490,18 @@ Future<List<List<String>>> fetchSheetValuesBatched(
 }
 
 /// Row count of [title] in [meta], when Google reported it.
+/// Stops with a clear message when a chosen sheet is not in the
+/// spreadsheet (renamed or deleted after it was chosen); Google itself
+/// only answers «Unable to parse range».
+void requireSheet(SpreadsheetMeta meta, String title, String what) {
+  if (meta.sheets.any((s) => s.title == title)) return;
+  final names = [for (final s in meta.sheets) '«${s.title}»'].join('، ');
+  throw SheetsApiException(
+    'الورقة «$title» غير موجودة في $what${meta.title == null ? '' : ' «${meta.title}»'}؛ ربما حُذفت أو تغيّر اسمها. الأوراق الموجودة: $names. اختر الورقة من جديد.',
+    status: 400,
+  );
+}
+
 int? sheetRowCount(SpreadsheetMeta meta, String title) {
   for (final s in meta.sheets) {
     if (s.title == title) return s.rowCount;

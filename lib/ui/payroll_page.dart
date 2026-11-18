@@ -395,6 +395,18 @@ class PayrollPageState extends State<PayrollPage> {
       final meta = await _s.sheets.getSpreadsheet(spreadsheetId);
       if (!mounted) return;
       setState(() => _userInfoSheets = [for (final s in meta.sheets) s.title]);
+      // The saved sheet was deleted or renamed in Google (owner's report:
+      // Google only said «Unable to parse range»).
+      if (sheetName != null &&
+          sheetName.isNotEmpty &&
+          !_userInfoSheets.contains(sheetName)) {
+        showToast(
+          context,
+          'الورقة «$sheetName» غير موجودة في «${meta.title ?? 'جدول بيانات المستخدمين'}»؛ ربما حُذفت أو تغيّر اسمها. اختر الورقة من «إعداد التدقيق» ← «الورقة».',
+          ToastType.warning,
+        );
+        return;
+      }
       final cols = await _s.cycles.googleColumns(spreadsheetId, sheetName);
       if (!mounted) return;
       _applyColumnOptions(cols);
@@ -1892,7 +1904,12 @@ class PayrollPageState extends State<PayrollPage> {
                           for (final s in _userInfoSheets) SelectOption(s, s),
                           if (_userInfoSheet.isNotEmpty &&
                               !_userInfoSheets.contains(_userInfoSheet))
-                            SelectOption(_userInfoSheet, _userInfoSheet),
+                            SelectOption(
+                              _userInfoSheet,
+                              _userInfoSheets.isEmpty
+                                  ? _userInfoSheet
+                                  : '$_userInfoSheet (غير موجودة)',
+                            ),
                         ],
                         value: _userInfoSheet,
                         maxWidth: 170,

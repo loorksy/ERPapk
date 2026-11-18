@@ -570,6 +570,22 @@ void main() {
       },
     );
 
+    test('a missing sheet stops with a clear message', () async {
+      final id = await db.createAuditJob(
+        null,
+        const AdjustRequest(
+          spreadsheetId: 'ui',
+          sheetName: 'تدقيق',
+          bulkData: '1002\tخصم\t5',
+        ).toJson(),
+      );
+      await runner.runPending();
+      final job = (await db.getAuditJob(id))!;
+      expect(job.status, AuditJob.failed);
+      expect((job.error ?? '').contains('الورقة «تدقيق» غير موجودة'), isTrue);
+      expect(fake.books['ui']!['Data']![2][11], '100');
+    });
+
     test('adjustments do not wait for or block cycle audits', () async {
       final job = await run('1001\tاضافة\t1');
       expect(job.status, AuditJob.done);

@@ -192,6 +192,25 @@ void main() {
     expect(fake.books['cyc']!['وكيل الشمال']!.length, 4);
   });
 
+  test('a deleted or renamed user-info sheet gives a clear message', () async {
+    final id = await linkedCycle();
+    final r = await payroll.execute(
+      PayrollRequest(
+        cycleId: id,
+        userInfo: const GoogleUserInfo('ui', 'تدقيق'),
+        discountRate: 10,
+        agentColor: '#8b5cf6',
+        managementColor: '#facc15',
+        columns: const AuditColumns(),
+      ),
+    );
+    expect(r.success, isFalse);
+    expect(r.message.contains('الورقة «تدقيق» غير موجودة'), isTrue);
+    expect(r.message.contains('«Sheet1»'), isTrue);
+    // Nothing was written.
+    expect(fake.log.any((l) => l.startsWith('BATCH')), isFalse);
+  });
+
   test('a cycle from files gets its own Google spreadsheet', () async {
     final id = await db.insertCycle(
       name: 'ملفات',

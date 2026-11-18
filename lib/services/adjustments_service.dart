@@ -93,6 +93,7 @@ class AdjustmentsService {
     final sheets = sheetsProvider();
     progress('قراءة الورقة «$title»...');
     final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ssId));
+    requireSheet(meta, title, 'جدول الرواتب');
     // ERP reads from row 1 in batches; with the grid size no rows are lost
     // after a gap on a batch edge (same fix as the audit).
     final rows = await fetchSheetValuesBatched(

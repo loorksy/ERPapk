@@ -140,6 +140,7 @@ class PayrollService {
       () => sheets.getSpreadsheet(spreadsheetId),
     );
     final mainSheetTitle = userInfoSheetTitle(meta, ui);
+    requireSheet(meta, mainSheetTitle, 'جدول بيانات المستخدمين');
     // ERP reads 'title'!A:ZZ in one request; reading in batches gives the
     // same rows and works for sheets of any size.
     final allRows = await fetchSheetValuesBatched(
@@ -923,6 +924,7 @@ class PayrollService {
       () => sheets.getSpreadsheet(ui.spreadsheetId),
     );
     final title = userInfoSheetTitle(meta, ui);
+    requireSheet(meta, title, 'جدول بيانات المستخدمين');
     final allRows = await fetchSheetValuesBatched(
       sheets,
       ui.spreadsheetId,
@@ -1160,6 +1162,7 @@ class PayrollService {
       () => sheets.getSpreadsheet(ui.spreadsheetId),
     );
     final uiTitle = userInfoSheetTitle(uiMeta, ui);
+    requireSheet(uiMeta, uiTitle, 'جدول بيانات المستخدمين');
     final uiRows = await fetchSheetValuesBatched(
       sheets,
       ui.spreadsheetId,

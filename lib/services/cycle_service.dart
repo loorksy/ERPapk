@@ -245,6 +245,9 @@ class CycleService {
         sheetName != null && sheetName.trim().isNotEmpty
             ? sheetName.trim()
             : (meta.sheets.isEmpty ? 'Sheet1' : meta.sheets.first.title);
+    if (meta.sheets.isNotEmpty) {
+      requireSheet(meta, title, 'جدول بيانات المستخدمين');
+    }
     final rows = await withSheetsRetry(
       () => sheets.valuesGet(
         spreadsheetId,
