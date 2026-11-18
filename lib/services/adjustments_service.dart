@@ -16,7 +16,14 @@ import '../google/sheets_client.dart';
 /// Owner's change: when one user has both additions and deductions in the
 /// list, they are first netted (مقاصة) into one operation at the place of
 /// the user's first line, and the status cell says what was done (تم خصم /
-/// تم اضافة) followed by the settlement. «خصم كامل» lines are not netted.
+/// تم اضافة) followed by the settlement. Since 3.3.0 (owner, 2026-11-18)
+/// repeated lines of one type are merged the same way (دمج: 12 + 12), so
+/// every user has one result. «خصم كامل» lines are not netted.
+///
+/// Owner's second system (3.3.0, chosen in the settings): the salary column
+/// is only read; the salary after the adjustments goes to a chosen column,
+/// with «الحالة»، «حالة المستخدم» and «العملية الحسابية» in the three
+/// columns after it (to its left in a right-to-left sheet).
 ///
 /// The app computes everything first (same values as ERP's line-by-line
 /// writes) and writes the final cells in batches, as a resumable job.
@@ -33,6 +40,27 @@ class AdjustmentsService {
 
   static const cellsPerRequest = 2000;
 
+  /// Second system (3.3.0): headers of the three columns after the chosen
+  /// column, and of the chosen column when its header is empty.
+  static const outputHeader = 'الراتب بعد التسوية';
+  static const stateHeader = 'الحالة';
+  static const userStateHeader = 'حالة المستخدم';
+  static const expressionHeader = 'العملية الحسابية';
+
+  /// Which system the adjustments screen shows (owner, 3.3.0): the first
+  /// (the salary column is updated) unless the second is chosen in the
+  /// settings; only one is offered at a time. Per workspace.
+  static const systemKey = 'adjustmentsSystemV1';
+
+  Future<bool> columnSystem() async => await db.getValue(systemKey) == 'column';
+
+  Future<void> setColumnSystem(bool on) =>
+      db.setValue(systemKey, on ? 'column' : 'replace');
+
+  /// Light green and light red of the Google Sheets palette.
+  static const toneGreen = '#b6d7a8';
+  static const toneRed = '#ea9999';
+
   Future<AdjustPlan> prepare(
     AdjustRequest req,
     void Function(String) progress,
@@ -44,7 +72,22 @@ class AdjustmentsService {
     final uidCol = columnLetterToIndex(req.idCol) ?? 2;
     final salCol = columnLetterToIndex(req.salaryCol) ?? 11;
     final stCol = columnLetterToIndex(req.statusCol) ?? 14;
-    if (salCol == stCol || salCol == uidCol || stCol == uidCol) {
+    final outCol =
+        req.outputCol.trim().isEmpty
+            ? null
+            : columnLetterToIndex(req.outputCol.trim());
+    if (outCol != null) {
+      final written = {outCol, outCol + 1, outCol + 2, outCol + 3};
+      if (salCol == uidCol ||
+          written.contains(uidCol) ||
+          written.contains(salCol)) {
+        return AdjustPlan.fail(
+          'عمود الراتب بعد التسوية والأعمدة الثلاثة بعده يجب ألا تشمل عمود المعرّف أو عمود الراتب.',
+        );
+      }
+    } else if (req.outputCol.trim().isNotEmpty) {
+      return AdjustPlan.fail('اختر عمود الراتب بعد التسوية.');
+    } else if (salCol == stCol || salCol == uidCol || stCol == uidCol) {
       return AdjustPlan.fail('أعمدة ID والراتب والحالة يجب أن تكون مختلفة.');
     }
     final sheets = sheetsProvider();
@@ -73,7 +116,19 @@ class AdjustmentsService {
         [w.row, w.originalSalary, w.salary, w.status],
     ];
     final steps = <Map<String, Object?>>[];
-    if (rowsOut.isNotEmpty) {
+    if (outCol != null) {
+      steps.addAll(
+        _columnSteps(
+          ssId,
+          title,
+          rows,
+          computed.writes,
+          uidCol: uidCol,
+          salCol: salCol,
+          outCol: outCol,
+        ),
+      );
+    } else if (rowsOut.isNotEmpty) {
       steps.add({
         'k': 'adjCheck',
         'ss': ssId,
@@ -138,6 +193,87 @@ class AdjustmentsService {
     return [for (final p in parts.take(3)) p.trim()];
   }
 
+  /// The steps of the second system: the same check that the salaries did
+  /// not change, the headers (and enough columns), the four cells of each
+  /// user's row, then the colours. The salary column is never written, so
+  /// running the same list again gives the same cells.
+  static List<Map<String, Object?>> _columnSteps(
+    String ssId,
+    String title,
+    List<List<String>> rows,
+    List<AdjustWrite> writes, {
+    required int uidCol,
+    required int salCol,
+    required int outCol,
+  }) {
+    if (writes.isEmpty) return const [];
+    final esc = escapeSheetTitleForRange(title);
+    final hasHeader = rows.isNotEmpty && isHeaderRowUserInfo(rows[0], uidCol);
+    final current = hasHeader ? (cellAt(rows[0], outCol) ?? '').trim() : '';
+    final steps = <Map<String, Object?>>[
+      {
+        'k': 'adjCheck',
+        'ss': ssId,
+        'range': "'$esc'!${columnIndexToLetter(salCol)}",
+        'rows': [
+          for (final w in writes) [w.row, w.originalSalary, w.originalSalary],
+        ],
+      },
+      {
+        'k': 'adjHead',
+        'ss': ssId,
+        'sheet': title,
+        'out': outCol,
+        'head':
+            hasHeader
+                ? [
+                  current.isEmpty ? outputHeader : current,
+                  stateHeader,
+                  userStateHeader,
+                  expressionHeader,
+                ]
+                : null,
+      },
+    ];
+    final cells = [
+      for (final w in writes)
+        [
+          w.row,
+          _num(round2(w.salary)),
+          w.state,
+          w.userState,
+          w.expression,
+          w.tone,
+        ],
+    ];
+    const perStep = cellsPerRequest ~/ 4;
+    for (var i = 0; i < cells.length; i += perStep) {
+      steps.add({
+        'k': 'adjOut',
+        'ss': ssId,
+        'sheet': esc,
+        'out': outCol,
+        'rows': cells.sublist(
+          i,
+          i + perStep > cells.length ? cells.length : i + perStep,
+        ),
+      });
+    }
+    steps.add({
+      'k': 'adjTone',
+      'ss': ssId,
+      'sheet': title,
+      'out': outCol,
+      'rows': [
+        for (final w in writes) [w.row, w.tone, w.owes ? 'r' : 'g'],
+      ],
+    });
+    return steps;
+  }
+
+  static num _num(double v) =>
+      v == v.truncateToDouble() && v.abs() < 1e15 ? v.toInt() : v;
+
   /// Runs step [index]; repeating a step writes the same cells again.
   Future<void> runStep(
     AdjustPlan plan,
@@ -146,6 +282,40 @@ class AdjustmentsService {
   ) async {
     final step = plan.steps[index];
     final sheets = sheetsProvider();
+    switch (step['k']) {
+      case 'adjHead':
+        progress('تجهيز أعمدة الراتب بعد التسوية...');
+        await _headStep(sheets, step);
+        return;
+      case 'adjOut':
+        final rows = step['rows'] as List;
+        progress('كتابة ${rows.length} صف...');
+        final sheet = step['sheet'] as String;
+        final out = (step['out'] as num).toInt();
+        final a = columnIndexToLetter(out), d = columnIndexToLetter(out + 3);
+        await withSheetsRetry(
+          () => sheets.valuesBatchUpdate(step['ss'] as String, [
+            for (final r in rows.cast<List>())
+              (
+                "'$sheet'!$a${r[0]}:$d${r[0]}",
+                [
+                  [
+                    r[1],
+                    r[2],
+                    r[3],
+                    // Kept as text: Google would read «12 - 12» as a date.
+                    '${r[4]}'.isEmpty ? '' : "'${r[4]}",
+                  ],
+                ],
+              ),
+          ]),
+        );
+        return;
+      case 'adjTone':
+        progress('تلوين الراتب بعد التسوية وحالة المستخدم...');
+        await _toneStep(sheets, step);
+        return;
+    }
     final rows = [
       for (final r in (step['rows'] as List))
         (r as List).map((e) => e?.toString() ?? '').toList(),
@@ -175,6 +345,108 @@ class AdjustmentsService {
         ],
       ]),
     );
+  }
+
+  /// The four columns exist in the grid, and their headers are written in
+  /// the header row (when the sheet has one).
+  Future<void> _headStep(SheetsApi sheets, Map<String, Object?> step) async {
+    final ss = step['ss'] as String;
+    final title = step['sheet'] as String;
+    final out = (step['out'] as num).toInt();
+    final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ss));
+    final props = meta.sheets.where((p) => p.title == title).firstOrNull;
+    if (props == null) {
+      throw AdjustmentConflict('الورقة «$title» غير موجودة في الجدول.');
+    }
+    final need = out + 4;
+    final have = props.columnCount;
+    if (have != null && have < need) {
+      await withSheetsRetry(
+        () => sheets.batchUpdate(ss, [
+          {
+            'appendDimension': {
+              'sheetId': props.sheetId,
+              'dimension': 'COLUMNS',
+              'length': need - have,
+            },
+          },
+        ]),
+      );
+    }
+    final head = step['head'];
+    if (head is List) {
+      final esc = escapeSheetTitleForRange(title);
+      await withSheetsRetry(
+        () => sheets.valuesUpdate(
+          ss,
+          "'$esc'!${columnIndexToLetter(out)}1:${columnIndexToLetter(out + 3)}1",
+          [List<Object?>.from(head)],
+        ),
+      );
+    }
+  }
+
+  /// Green or red background on the salary after the adjustments and on
+  /// «حالة المستخدم»; consecutive rows of one colour are one request.
+  Future<void> _toneStep(SheetsApi sheets, Map<String, Object?> step) async {
+    final ss = step['ss'] as String;
+    final title = step['sheet'] as String;
+    final out = (step['out'] as num).toInt();
+    final meta = await withSheetsRetry(() => sheets.getSpreadsheet(ss));
+    final sheetId = getSheetIdByTitle(meta, title);
+    if (sheetId == null) return;
+    final rows = [for (final r in (step['rows'] as List)) r as List];
+    final requests = <Map<String, dynamic>>[];
+    void column(int col, int field) {
+      final byRow = <int, String>{
+        for (final r in rows) (r[0] as num).toInt(): '${r[field]}',
+      };
+      final keys = byRow.keys.toList()..sort();
+      var i = 0;
+      while (i < keys.length) {
+        final first = keys[i];
+        final tone = byRow[first]!;
+        var j = i + 1;
+        while (j < keys.length &&
+            keys[j] == keys[j - 1] + 1 &&
+            byRow[keys[j]] == tone) {
+          j++;
+        }
+        requests.add({
+          'repeatCell': {
+            'range': {
+              'sheetId': sheetId,
+              'startRowIndex': first - 1,
+              'endRowIndex': keys[j - 1],
+              'startColumnIndex': col,
+              'endColumnIndex': col + 1,
+            },
+            'cell': {
+              'userEnteredFormat':
+                  tone.isEmpty
+                      ? <String, Object?>{}
+                      : {
+                        'backgroundColor': hexToRgb(
+                          tone == 'g' ? toneGreen : toneRed,
+                        ),
+                      },
+            },
+            'fields': 'userEnteredFormat.backgroundColor',
+          },
+        });
+        i = j;
+      }
+    }
+
+    column(out, 1);
+    column(out + 2, 2);
+    for (var i = 0; i < requests.length; i += 5000) {
+      final part = requests.sublist(
+        i,
+        i + 5000 > requests.length ? requests.length : i + 5000,
+      );
+      await withSheetsRetry(() => sheets.batchUpdate(ss, part));
+    }
   }
 
   /// Stops before writing if someone changed a salary since the sheet was
@@ -415,8 +687,9 @@ class AdjustmentsService {
       return index[n.isNotEmpty ? n : userId];
     }
 
-    // Owner's settlement: additions and deductions of one user are netted
-    // into one operation at the place of the user's first such line.
+    // Owner's settlement: the lines of one user (additions and deductions,
+    // or repeated lines of one type) become one operation at the place of
+    // the user's first line.
     final lines = parseLines(bulkData);
     final ops = <_Op>[];
     final settled = <int, _Op>{};
@@ -429,12 +702,8 @@ class AdjustmentsService {
     for (final l in lines) {
       final r = rowOf(l.userId);
       final mine = r == null ? null : byRow[r];
-      final mixed =
-          settle &&
-          mine != null &&
-          mine.any((x) => x.isDeduction) &&
-          mine.any((x) => !x.isDeduction);
-      if (!l.full && mixed) {
+      final grouped = settle && mine != null && mine.length > 1;
+      if (!l.full && grouped) {
         if (settled.containsKey(r)) {
           // Merged into the settlement on the user's first line.
           mergedInto[l.lineNo] = settled[r]!.line.lineNo;
@@ -448,7 +717,15 @@ class AdjustmentsService {
             add += x.amountNum;
           }
         }
-        final op = _Op(l, r, round2(add), round2(ded));
+        final op = _Op(
+          l,
+          r,
+          round2(add),
+          round2(ded),
+          mixed:
+              mine.any((x) => x.isDeduction) && mine.any((x) => !x.isDeduction),
+          parts: mine,
+        );
         settled[r!] = op;
         ops.add(op);
       } else {
@@ -465,7 +742,7 @@ class AdjustmentsService {
       final l = op.line;
       final found = op.row;
       lineResult[l.lineNo] = results.length;
-      if (op.isSettlement) {
+      if (op.isSettlement && op.mixed) {
         settlements.add(
           AdjustSettlement(
             l.userId,
@@ -492,7 +769,17 @@ class AdjustmentsService {
           parseSalaryCellNumber(cellAt(rows[found], salCol));
       SheetOp computed;
       String? settlement;
-      if (op.isSettlement) {
+      String? merged;
+      if (op.isSettlement && !op.mixed) {
+        // Repeated lines of one type: their total, applied once.
+        final ded = op.parts.first.isDeduction;
+        merged = op.parts.map((x) => jsNumberToString(x.amountNum)).join(' + ');
+        computed = computeSheetOp(
+          currentSalary: current,
+          type: ded ? 'خصم' : 'اضافة',
+          amountRaw: jsNumberToString(ded ? op.ded! : op.add!),
+        );
+      } else if (op.isSettlement) {
         final net = round2(op.add! - op.ded!);
         settlement =
             'إضافة ${jsNumberToString(op.add!)}، خصم ${jsNumberToString(op.ded!)}';
@@ -519,22 +806,29 @@ class AdjustmentsService {
         );
       }
       final statusText =
-          settlement == null
+          merged != null
+              ? '${computed.statusText} (دمج: $merged)'
+              : settlement == null
               ? computed.statusText
               : computed.statusText == 'تمت المقاصة'
               ? 'تمت المقاصة ($settlement)'
               : '${computed.statusText} (مقاصة: $settlement)';
       salaryNow[found] = computed.newSalary;
       final prev = finalCells[found];
+      final res = computed.result;
       finalCells[found] = AdjustWrite(
         row: found + 1,
         originalSalary:
             prev?.originalSalary ?? (cellAt(rows[found], salCol) ?? ''),
         salary: round2(computed.newSalary).toStringAsFixed(2),
         status: statusText,
+        state: stateOf(res.status),
+        owes: res.debt > 0 || res.zeroSalAmt > 0,
+        expression:
+            op.isSettlement ? expressionOf(op.parts) : (prev?.expression ?? ''),
       );
       results.add(
-        computed.result.copyWith(id: l.userId, settlement: settlement),
+        res.copyWith(id: l.userId, settlement: settlement, merged: merged),
       );
     }
     final writes = finalCells.values.toList()..sort((a, b) => a.row - b.row);
@@ -545,6 +839,32 @@ class AdjustmentsService {
       mergedInto: mergedInto,
       settlements: settlements,
     );
+  }
+
+  /// «الحالة» of the second system: what happened to the user's salary.
+  static String stateOf(String status) => switch (status) {
+    'تمت الإضافة' => 'اضافة',
+    'تم الخصم بالكامل' || 'تم خصم الدين' => 'خصم',
+    'باقي عليه' => 'متبقي عليه',
+    _ => status,
+  };
+
+  /// «العملية الحسابية» of a user with several lines: repeated amounts of
+  /// one type summed (14 + 15), additions minus deductions otherwise
+  /// (15 - 14), additions first.
+  static String expressionOf(List<AdjustLine> parts) {
+    if (parts.length < 2) return '';
+    final adds = [
+      for (final x in parts)
+        if (!x.isDeduction) jsNumberToString(x.amountNum),
+    ];
+    final deds = [
+      for (final x in parts)
+        if (x.isDeduction) jsNumberToString(x.amountNum),
+    ];
+    if (adds.isEmpty) return deds.join(' + ');
+    if (deds.isEmpty) return adds.join(' + ');
+    return [adds.join(' + '), ...deds].join(' - ');
   }
 
   /// ERP `summarizeResults`.
@@ -573,13 +893,13 @@ class AdjustmentsService {
 
   static const resultsSheetName = 'إضافات وخصومات';
 
-  /// The results laid out as the owner pastes them by hand. Owner's layout (2026-11-17, the «خلاصة التسوية» example): A–C hold
-  /// the list after the settlement — the pasted lines, with the lines of a
-  /// netted user replaced by one line carrying the net (on the first line
-  /// of the net's type, so deductions stay with deductions and additions
-  /// with additions) — column D empty, E–G the result beside each line (as
-  /// «نسخ» copies it), the totals under them, and the settled users in a
-  /// table further down.
+  /// The results laid out as the owner pastes them by hand (owner's
+  /// layout, 3.3.0): A–C the list exactly as it was pasted (every line,
+  /// blank lines kept), column D empty, and E–G the results with one row
+  /// per user — a user's lines are already one result after the settlement
+  /// (مقاصة / دمج); unknown ids repeated in the list are summed. Then the
+  /// totals under the longer of the two, and the settled users in a table
+  /// further down.
   static ResultsSheet sheetLayout(AdjustOutcome out) {
     String m(double v) => money(v).replaceFirst('.', ',');
     final rows = <List<Object?>>[
@@ -593,55 +913,30 @@ class AdjustmentsService {
         'المبلغ',
       ],
     ];
-    bool deduction(AdjustSheetLine l) =>
-        l.cells.length > 1 && l.cells[1].contains('خصم');
-    final settledBy = {
-      for (final x in out.settlements) normalizeUserId(x.id): x,
-    };
-    // The lines of each netted group: the line with the result and the
-    // lines merged into it.
-    final group = <int, List<int>>{};
-    for (var n = 0; n < out.lines.length; n++) {
-      final l = out.lines[n];
-      final anchor =
-          l.mergedInto >= 0 ? l.mergedInto : (l.result >= 0 ? n : -1);
-      if (anchor >= 0) group.putIfAbsent(anchor, () => []).add(n);
-    }
-    // Where each netted group is written.
-    final placeAt = <int, int>{};
-    for (final e in group.entries) {
-      final r = out.lines[e.key].result;
-      if (r < 0 || r >= out.results.length) continue;
-      final x = settledBy[normalizeUserId(out.results[r].id)];
-      if (x == null || e.value.length < 2) continue;
-      final want =
-          x.net == 0
-              ? e.value.first
-              : e.value.firstWhere(
-                (n) => deduction(out.lines[n]) == (x.net < 0),
-                orElse: () => e.value.first,
-              );
-      for (final n in e.value) {
-        placeAt[n] = n == want ? e.key : -1;
+    // E–G: one row per user and status, in the order of the results.
+    final merged = <(String, String, double)>[];
+    final at = <String, int>{};
+    for (final r in out.results) {
+      final n = normalizeUserId(r.id);
+      final key = '${n.isEmpty ? r.id.trim() : n}\u0000${r.status}';
+      final i = at[key];
+      if (i != null) {
+        final (id, st, amount) = merged[i];
+        merged[i] = (id, st, round2(amount + r.amount));
+        continue;
       }
+      at[key] = merged.length;
+      merged.add((r.id, r.status, r.amount));
     }
-    for (var n = 0; n < out.lines.length; n++) {
-      final l = out.lines[n];
-      final at = placeAt[n];
-      if (at == -1) continue; // folded into the netted line
-      var a = [
-        for (var i = 0; i < 3; i++) i < l.cells.length ? l.cells[i] : '',
-      ];
-      var e = <Object?>['', '', ''];
-      final r = at != null ? out.lines[at].result : l.result;
-      if (r >= 0 && r < out.results.length) {
-        final res = out.results[r];
-        e = [res.id, res.status, m(res.amount)];
-        if (at != null) {
-          final x = settledBy[normalizeUserId(res.id)]!;
-          a = [a[0], a[1], jsNumberToString(x.net.abs())];
-        }
-      }
+    final n =
+        out.lines.length > merged.length ? out.lines.length : merged.length;
+    for (var i = 0; i < n; i++) {
+      final cells = i < out.lines.length ? out.lines[i].cells : const [];
+      final a = [for (var c = 0; c < 3; c++) c < cells.length ? cells[c] : ''];
+      final e =
+          i < merged.length
+              ? <Object?>[merged[i].$1, merged[i].$2, m(merged[i].$3)]
+              : <Object?>['', '', ''];
       rows.add([...a, '', ...e]);
     }
     final s = out.summary ?? summarize(out.results);
@@ -819,6 +1114,7 @@ class AdjustRequest {
     this.idCol = AdjustmentsService.defaultIdCol,
     this.salaryCol = AdjustmentsService.defaultSalaryCol,
     this.statusCol = AdjustmentsService.defaultStatusCol,
+    this.outputCol = '',
   });
   final String spreadsheetId;
   final String sheetName;
@@ -826,6 +1122,10 @@ class AdjustRequest {
   final String salaryCol;
   final String statusCol;
   final String bulkData;
+
+  /// Second system (3.3.0): the column that receives the salary after the
+  /// adjustments; empty for the first system (the salary column itself).
+  final String outputCol;
 
   Map<String, Object?> toJson() => {
     'kind': 'adjustments',
@@ -835,6 +1135,7 @@ class AdjustRequest {
     'salaryCol': salaryCol,
     'statusCol': statusCol,
     'bulkData': bulkData,
+    if (outputCol.isNotEmpty) 'outputCol': outputCol,
   };
 
   static AdjustRequest fromJson(Map<String, Object?> j) => AdjustRequest(
@@ -846,6 +1147,7 @@ class AdjustRequest {
         (j['salaryCol'] as String?) ?? AdjustmentsService.defaultSalaryCol,
     statusCol:
         (j['statusCol'] as String?) ?? AdjustmentsService.defaultStatusCol,
+    outputCol: (j['outputCol'] as String?) ?? '',
   );
 }
 
@@ -872,11 +1174,25 @@ class AdjustLine {
 }
 
 class _Op {
-  _Op(this.line, this.row, this.add, this.ded);
+  _Op(
+    this.line,
+    this.row,
+    this.add,
+    this.ded, {
+    this.mixed = false,
+    this.parts = const [],
+  });
   final AdjustLine line;
   final int? row;
   final double? add;
   final double? ded;
+
+  /// Additions and deductions (مقاصة); false for repeated lines of one
+  /// type (دمج).
+  final bool mixed;
+
+  /// Every line of the user, in the pasted order.
+  final List<AdjustLine> parts;
   bool get isSettlement => add != null;
 }
 
@@ -901,6 +1217,9 @@ class AdjustWrite {
     required this.originalSalary,
     required this.salary,
     required this.status,
+    this.state = '',
+    this.owes = false,
+    this.expression = '',
   });
 
   /// 1-based sheet row.
@@ -908,6 +1227,25 @@ class AdjustWrite {
   final String originalSalary;
   final String salary;
   final String status;
+
+  /// Second system: «الحالة» (خصم، اضافة، متبقي عليه…).
+  final String state;
+
+  /// Second system: «حالة المستخدم» is «مديون» (else «له»).
+  final bool owes;
+
+  /// Second system: «العملية الحسابية» (only for a user with several lines).
+  final String expression;
+
+  String get userState => owes ? 'مديون' : 'له';
+
+  /// The colour of the salary after the adjustments: green for an
+  /// addition, red when something was deducted or is still owed.
+  String get tone => switch (state) {
+    'اضافة' => 'g',
+    'خصم' || 'متبقي عليه' || 'سحب ادارة' => 'r',
+    _ => '',
+  };
 }
 
 class BulkComputation {
@@ -988,6 +1326,7 @@ class AdjustResult {
     this.notFoundAmt = 0,
     this.zeroSalAmt = 0,
     this.settlement,
+    this.merged,
   });
   final String id;
   final String status;
@@ -1001,23 +1340,32 @@ class AdjustResult {
   /// «إضافة X، خصم Y» when the line is the owner's settlement.
   final String? settlement;
 
+  /// «12 + 12» when repeated lines of one type were merged (3.3.0).
+  final String? merged;
+
   String get displayStatus =>
-      settlement == null || status == 'تمت المقاصة'
+      merged != null
+          ? '$status (دمج)'
+          : settlement == null || status == 'تمت المقاصة'
           ? status
           : '$status (مقاصة)';
 
-  AdjustResult copyWith({required String id, String? settlement}) =>
-      AdjustResult(
-        id: id,
-        status: status,
-        amount: amount,
-        added: added,
-        deducted: deducted,
-        debt: debt,
-        notFoundAmt: notFoundAmt,
-        zeroSalAmt: zeroSalAmt,
-        settlement: settlement,
-      );
+  AdjustResult copyWith({
+    required String id,
+    String? settlement,
+    String? merged,
+  }) => AdjustResult(
+    id: id,
+    status: status,
+    amount: amount,
+    added: added,
+    deducted: deducted,
+    debt: debt,
+    notFoundAmt: notFoundAmt,
+    zeroSalAmt: zeroSalAmt,
+    settlement: settlement,
+    merged: merged,
+  );
 
   List<Object?> toJson() => [
     id,
@@ -1029,6 +1377,7 @@ class AdjustResult {
     notFoundAmt,
     zeroSalAmt,
     settlement,
+    merged,
   ];
 
   static AdjustResult fromJson(Object? j) {
@@ -1044,6 +1393,7 @@ class AdjustResult {
       notFoundAmt: d(6),
       zeroSalAmt: d(7),
       settlement: l.length > 8 ? l[8] as String? : null,
+      merged: l.length > 9 ? l[9] as String? : null,
     );
   }
 }

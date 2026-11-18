@@ -6,6 +6,8 @@ class FakeSheets implements SheetsApi {
   final books = <String, Map<String, List<List<String>>>>{};
   final ids = <String, Map<String, int>>{};
   final colors = <String, Map<int, String>>{}; // "ss|sheetId" -> row -> rgb
+  final cellColors =
+      <String, Map<int, String>>{}; // "ss|sheetId|col" -> row -> rgb
   final log = <String>[];
 
   /// When it returns true for an operation, that call fails as if the
@@ -186,6 +188,24 @@ class FakeSheets implements SheetsApi {
           row++
         ) {
           byRow[row] = hex;
+        }
+        // Per column too, for colours on single columns.
+        for (
+          var col = (range['startColumnIndex'] as int?) ?? 0;
+          col < ((range['endColumnIndex'] as int?) ?? 0);
+          col++
+        ) {
+          final cells = cellColors.putIfAbsent(
+            '$id|${range['sheetId']}|$col',
+            () => {},
+          );
+          for (
+            var row = range['startRowIndex'] as int;
+            row < (range['endRowIndex'] as int);
+            row++
+          ) {
+            cells[row] = hex;
+          }
         }
         replies.add({});
       } else if (r['updateCells'] != null &&

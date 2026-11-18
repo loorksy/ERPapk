@@ -690,6 +690,15 @@ class _SortPageState extends State<SortPage> {
       builder:
           (ctx, setLocal) => AppSheet(
             title: 'جدول بيانات المستخدمين',
+            actions: [
+              RefreshAction(
+                onRefresh: () async {
+                  await _loadFiles();
+                  await _loadSheets(keep: true);
+                  setLocal(() {});
+                },
+              ),
+            ],
             footer: ErpButton(label: 'تم', onPressed: () => Navigator.pop(ctx)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

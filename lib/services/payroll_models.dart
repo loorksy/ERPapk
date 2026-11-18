@@ -174,6 +174,24 @@ class PayrollResult {
     this.duplicates = const [],
   });
 
+  /// The same result with another message (incremental audit, 3.3.0).
+  PayrollResult withMessage(String text) => PayrollResult(
+    success: success,
+    message: text,
+    code: code,
+    summary: summary,
+    applied: applied,
+    cycleSynced: cycleSynced,
+    localOnly: localOnly,
+    spreadsheetUrl: spreadsheetUrl,
+    results: results,
+    sampleUserIds: sampleUserIds,
+    sampleMgmtIds: sampleMgmtIds,
+    sampleAgentIds: sampleAgentIds,
+    diagnostic: diagnostic,
+    duplicates: duplicates,
+  );
+
   factory PayrollResult.fail(String message, {String? code, String? url}) =>
       PayrollResult(
         success: false,

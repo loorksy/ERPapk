@@ -688,7 +688,17 @@ class _CycleModalState extends State<CycleModal> {
         _googleTab && _listMessage != null && !_listMessage!.contains('جاري');
     return AppSheet(
       title: widget.edit == null ? 'فترة رواتب جديدة' : 'تعديل فترة الرواتب',
-      actions: [HelpButton(title: 'فترة الرواتب', items: () => newPeriodHelp)],
+      actions: [
+        if (_googleTab)
+          RefreshAction(
+            onRefresh: () async {
+              await _loadSpreadsheets();
+              await _loadSheets(true, _mgmtSs);
+              await _loadSheets(false, _agentSs);
+            },
+          ),
+        HelpButton(title: 'فترة الرواتب', items: () => newPeriodHelp),
+      ],
       footer:
           _showSave
               ? Row(

@@ -26,6 +26,9 @@ class _SettingsPageState extends State<SettingsPage> {
   bool? _syncEnabled;
   RoundingMode? _rounding;
 
+  /// Second adjustments system (3.3.0); null while loading.
+  bool? _columnSystem;
+
   @override
   void initState() {
     super.initState();
@@ -33,10 +36,12 @@ class _SettingsPageState extends State<SettingsPage> {
       final services = AppScope.read(context);
       final enabled = await services.syncWorker.isEnabled();
       final rounding = await services.userTools.defaultMode();
+      final column = await services.adjustments.columnSystem();
       if (mounted) {
         setState(() {
           _syncEnabled = enabled;
           _rounding = rounding;
+          _columnSystem = column;
         });
       }
     });
@@ -130,6 +135,50 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() => _rounding = picked);
     showToast(context, 'الجبر الافتراضي: ${picked.label}', ToastType.success);
+  }
+
+  /// Owner's request (3.3.0): the second adjustments system is hidden until
+  /// it is chosen here, and then it replaces the first one.
+  Future<void> _pickAdjustmentsSystem() async {
+    final services = AppScope.read(context);
+    final current = _columnSystem ?? false;
+    final picked = await showAppSheet<bool>(
+      context,
+      (ctx) => AppSheet(
+        title: 'نظام التسويات',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ChoiceTile(
+              icon: !current ? Icons.check : Icons.edit_note_outlined,
+              label: 'تعديل عمود الراتب',
+              selected: !current,
+              onTap: () => Navigator.pop(ctx, false),
+            ),
+            ChoiceTile(
+              icon: current ? Icons.check : Icons.view_week_outlined,
+              label: 'الراتب بعد التسوية في عمود منفصل',
+              selected: current,
+              onTap: () => Navigator.pop(ctx, true),
+            ),
+            const Caption(
+              'نظام واحد فقط يظهر في «التسويات». الأول يكتب الراتب الجديد في عمود الراتب و«تم خصم / تم اضافة» في عمود الحالة. الثاني لا يغيّر عمود الراتب: يكتب الراتب بعد التسوية ملوّنًا في عمود تختاره، وبعده «الحالة» و«حالة المستخدم» و«العملية الحسابية».',
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == current || !mounted) return;
+    await services.adjustments.setColumnSystem(picked);
+    if (!mounted) return;
+    setState(() => _columnSystem = picked);
+    showToast(
+      context,
+      picked
+          ? 'التسويات: الراتب بعد التسوية في عمود منفصل'
+          : 'التسويات: تعديل عمود الراتب',
+      ToastType.success,
+    );
   }
 
   /// `aboutSheet`.
@@ -271,6 +320,19 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 trailing: const RowChevron(),
                 onTap: _rounding == null ? null : _pickRounding,
+              ),
+              ListRow(
+                title: 'نظام التسويات',
+                leading: IconChip(Icons.swap_vert),
+                subtitle: Text(
+                  _columnSystem == null
+                      ? '…'
+                      : _columnSystem!
+                      ? 'الراتب بعد التسوية في عمود منفصل'
+                      : 'تعديل عمود الراتب',
+                ),
+                trailing: const RowChevron(),
+                onTap: _columnSystem == null ? null : _pickAdjustmentsSystem,
               ),
             ],
           ),

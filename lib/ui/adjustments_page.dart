@@ -45,6 +45,11 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   String _idCol = AdjustmentsService.defaultIdCol;
   String _salaryCol = AdjustmentsService.defaultSalaryCol;
   String _statusCol = AdjustmentsService.defaultStatusCol;
+
+  /// Second system (owner, 3.3.0), chosen in the settings: the salary after
+  /// the adjustments goes to [_outCol] and the three columns after it.
+  bool _columnMode = false;
+  String _outCol = '';
   final _bulk = TextEditingController();
 
   AuditJob? _job;
@@ -69,7 +74,17 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   @override
   void didUpdateWidget(AdjustmentsPage old) {
     super.didUpdateWidget(old);
-    if (widget.active && !old.active && _files.isEmpty) _loadFiles();
+    if (widget.active && !old.active) {
+      if (_files.isEmpty) _loadFiles();
+      _loadSystem();
+    }
+  }
+
+  /// The system chosen in the settings (it may change while this tab is
+  /// hidden).
+  Future<void> _loadSystem() async {
+    final on = await _s.adjustments.columnSystem();
+    if (mounted && on != _columnMode) setState(() => _columnMode = on);
   }
 
   @override
@@ -80,6 +95,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   }
 
   Future<void> _init() async {
+    await _loadSystem();
     await _restoreDraft();
     await _loadFiles();
     await _watchJob();
@@ -95,6 +111,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
       'idCol': _idCol,
       'salaryCol': _salaryCol,
       'statusCol': _statusCol,
+      'outCol': _outCol,
       'bulk': _bulk.text,
     }),
   );
@@ -115,6 +132,8 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
         _idCol = col('idCol', _idCol);
         _salaryCol = col('salaryCol', _salaryCol);
         _statusCol = col('statusCol', _statusCol);
+        final out = d['outCol']?.toString() ?? '';
+        _outCol = columnLetterToIndex(out) == null ? '' : out;
         _bulk.text = d['bulk']?.toString() ?? '';
       });
       if (_ssId.isNotEmpty) await _loadSheets(keep: true);
@@ -217,6 +236,11 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
       );
       return;
     }
+    if (_columnMode && _outCol.isEmpty) {
+      showToast(context, 'اختر عمود الراتب بعد التسوية', ToastType.error);
+      await _openColumnsSheet();
+      return;
+    }
     await _saveDraft();
     await _s.startAdjustments(
       AdjustRequest(
@@ -226,6 +250,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
         salaryCol: _salaryCol,
         statusCol: _statusCol,
         bulkData: _bulk.text,
+        outputCol: _columnMode ? _outCol : '',
       ),
     );
     await _watchJob();
@@ -325,12 +350,23 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
       builder:
           (ctx, setLocal) => AppSheet(
             title: 'جدول الرواتب',
+            actions: [
+              RefreshAction(
+                onRefresh: () async {
+                  await _loadFiles();
+                  await _loadSheets(keep: true);
+                  setLocal(() {});
+                },
+              ),
+            ],
             footer: ErpButton(label: 'تم', onPressed: () => Navigator.pop(ctx)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'الجدول والورقة التي فيها رواتب المستخدمين، وعادة تكون بيانات المستخدمين. يُعدَّل فيها عمودا الراتب والحالة.',
+                  _columnMode
+                      ? 'الجدول والورقة التي فيها رواتب المستخدمين، وعادة تكون بيانات المستخدمين. يُقرأ منها الراتب ولا يتغير، ويُكتب الراتب بعد التسوية في عمود تختاره.'
+                      : 'الجدول والورقة التي فيها رواتب المستخدمين، وعادة تكون بيانات المستخدمين. يُعدَّل فيها عمودا الراتب والحالة.',
                   style: TextStyle(fontSize: 14.5, height: 1.7, color: Tw.ink2),
                 ),
                 const SizedBox(height: 14),
@@ -389,27 +425,49 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     ),
   );
 
-  /// `adjColsSheet`: the id, salary and status columns.
+  /// The four columns of the second system, as «M، N، O، P».
+  String get _outRange {
+    final i = columnLetterToIndex(_outCol);
+    if (i == null) return '';
+    return '${columnIndexToLetter(i)}–${columnIndexToLetter(i + 3)}';
+  }
+
+  /// `adjColsSheet`: the id, salary and status columns (first system), or
+  /// the id, salary and output columns (second system).
   Future<void> _openColumnsSheet() => showAppSheet<void>(
     context,
     (ctx) => StatefulBuilder(
       builder: (ctx, setLocal) {
-        Widget col(String label, String value, void Function(String) set) =>
-            FormRow(
-              label,
-              CompactSelect<String>(
-                options: _letterOptions,
-                shown: (v) => v,
-                value: value,
-                onChanged: (v) {
-                  setState(() => set(v));
-                  setLocal(() {});
-                  _saveDraft();
-                },
-              ),
-            );
+        Widget col(
+          String label,
+          String value,
+          void Function(String) set, {
+          List<SelectOption<String>>? options,
+        }) => FormRow(
+          label,
+          CompactSelect<String>(
+            options: options ?? _letterOptions,
+            shown: (v) => v.isEmpty ? '—' : v,
+            value: value,
+            onChanged: (v) {
+              setState(() => set(v));
+              setLocal(() {});
+              _saveDraft();
+            },
+          ),
+        );
+        final i = columnLetterToIndex(_outCol);
+        String l(int k) => i == null ? '' : columnIndexToLetter(i + k);
         return AppSheet(
           title: 'ربط الحقول',
+          actions: [
+            RefreshAction(
+              onRefresh: () async {
+                await _loadHeader();
+                setLocal(() {});
+              },
+            ),
+          ],
           footer: ErpButton(label: 'تم', onPressed: () => Navigator.pop(ctx)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -418,11 +476,26 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                 children: [
                   col('المعرّف', _idCol, (v) => _idCol = v),
                   col('الراتب', _salaryCol, (v) => _salaryCol = v),
-                  col('الحالة', _statusCol, (v) => _statusCol = v),
+                  if (_columnMode)
+                    col(
+                      'الراتب بعد التسوية',
+                      _outCol,
+                      (v) => _outCol = v,
+                      options: [
+                        const SelectOption('', '— اختر العمود —'),
+                        ...columnOptions(_header),
+                      ],
+                    )
+                  else
+                    col('الحالة', _statusCol, (v) => _statusCol = v),
                 ],
               ),
-              const Caption(
-                'أعمدة جدول الرواتب: رقم المستخدم، والراتب الذي يُعدَّل، والحالة التي يُكتب فيها «تم خصم» أو «تم اضافة».',
+              Caption(
+                _columnMode
+                    ? i == null
+                        ? 'عمود الراتب لا يتغير. اختر عمودًا فارغًا للراتب بعد التسوية؛ تُكتب بعده ثلاثة أعمدة (على يساره في الورقة العربية): الحالة، وحالة المستخدم، والعملية الحسابية.'
+                        : 'يُكتب الراتب بعد التسوية في $_outCol ملوّنًا (أخضر للإضافة، أحمر للخصم)، و«الحالة» في ${l(1)}، و«حالة المستخدم» في ${l(2)} (مديون أو له)، و«العملية الحسابية» في ${l(3)} لمن له أكثر من سطر. عمود الراتب لا يتغير.'
+                    : 'أعمدة جدول الرواتب: رقم المستخدم، والراتب الذي يُعدَّل، والحالة التي يُكتب فيها «تم خصم» أو «تم اضافة».',
               ),
             ],
           ),
@@ -440,10 +513,18 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
     final deds = lines.where((l) => l.isDeduction).length;
     final full = lines.where((l) => l.full).length;
     final byId = <String, Set<bool>>{};
+    final perId = <String, int>{};
     for (final l in lines.where((l) => !l.full)) {
-      byId.putIfAbsent(l.userId, () => {}).add(l.isDeduction);
+      final id = normalizeUserId(l.userId);
+      byId.putIfAbsent(id, () => {}).add(l.isDeduction);
+      perId[id] = (perId[id] ?? 0) + 1;
     }
     final netted = byId.values.where((s) => s.length == 2).length;
+    final merged =
+        [
+          for (final e in byId.entries)
+            if (e.value.length == 1 && perId[e.key]! > 1) e.key,
+        ].length;
     final connected = AppScope.of(context).auth.isConnected;
     Widget section(String title, Widget child, {Widget? trailing}) => Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -458,6 +539,10 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
         ScreenHeader(title: 'تسويات الرواتب', help: () => adjustmentsHelp),
         section(
           'جدول الرواتب',
+          trailing:
+              _columnMode
+                  ? StatusBadge('عمود منفصل', tone: Tone.info, small: true)
+                  : null,
           GroupList(
             children: [
               if (connected)
@@ -487,9 +572,19 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                 enabled: !busy,
                 leading: IconChip(Icons.view_column_outlined),
                 title: 'ربط الحقول',
-                subtitle: Text(
-                  'المعرّف $_idCol، الراتب $_salaryCol، الحالة $_statusCol',
-                ),
+                subtitle:
+                    !_columnMode
+                        ? Text(
+                          'المعرّف $_idCol، الراتب $_salaryCol، الحالة $_statusCol',
+                        )
+                        : _outCol.isEmpty
+                        ? Text(
+                          'اختر عمود الراتب بعد التسوية',
+                          style: TextStyle(color: Tw.warn),
+                        )
+                        : Text(
+                          'المعرّف $_idCol، الراتب $_salaryCol، بعد التسوية $_outRange',
+                        ),
                 trailing: const RowChevron(),
                 onTap: _openColumnsSheet,
               ),
@@ -522,7 +617,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _editor(lines.length, adds, deds, full, netted, busy),
+              _editor(lines.length, adds, deds, full, netted, merged, busy),
               const Caption(
                 'كل سطر: رقم المستخدم، ثم النوع، ثم المبلغ، كما تُنسخ من Excel.',
               ),
@@ -544,7 +639,15 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
   }
 
   /// `.editor`: the list with its counters.
-  Widget _editor(int n, int adds, int deds, int full, int netted, bool busy) {
+  Widget _editor(
+    int n,
+    int adds,
+    int deds,
+    int full,
+    int netted,
+    int merged,
+    bool busy,
+  ) {
     Widget cnt(String t, {bool lead = false}) => Container(
       height: 28,
       padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -616,6 +719,7 @@ class _AdjustmentsPageState extends State<AdjustmentsPage> {
                 if (deds > 0) cnt('خصم $deds'),
                 if (full > 0) cnt('خصم كامل $full'),
                 if (netted > 0) cnt('مقاصة $netted'),
+                if (merged > 0) cnt('دمج $merged'),
               ],
             ),
           ),
@@ -1028,11 +1132,13 @@ class _ResultRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 StatusBadge(st, tone: tone, small: true),
-                if (r.settlement != null)
+                if (r.settlement != null || r.merged != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 5),
                     child: Text(
-                      'مقاصة: ${r.settlement}',
+                      r.merged != null
+                          ? 'دمج: ${ltr(r.merged!)}'
+                          : 'مقاصة: ${r.settlement}',
                       style: TextStyle(fontSize: 12, color: Tw.ink2),
                     ),
                   ),

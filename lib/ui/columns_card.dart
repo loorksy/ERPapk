@@ -238,6 +238,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
                               ),
                             ),
                             const Spacer(),
+                            RefreshAction(onRefresh: _loadHeads),
                             HelpButton(
                               title: 'ربط حقول البيانات',
                               items: () => mappingHelp,

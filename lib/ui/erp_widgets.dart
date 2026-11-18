@@ -1132,3 +1132,53 @@ List<SelectOption<String>> columnOptions(
       ),
   ];
 }
+
+/// «تحديث القوائم» (owner's request, 3.3.0): reloads the spreadsheets,
+/// sheets and column names of a picker from Google, so a sheet added in
+/// Google appears without restarting the app.
+class RefreshAction extends StatefulWidget {
+  const RefreshAction({super.key, required this.onRefresh});
+  final Future<void> Function() onRefresh;
+
+  @override
+  State<RefreshAction> createState() => _RefreshActionState();
+}
+
+class _RefreshActionState extends State<RefreshAction> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    setState(() => _busy = true);
+    try {
+      // The pickers show their own message when Google cannot be read.
+      await widget.onRefresh();
+    } catch (e) {
+      if (mounted) showToast(context, '$e', ToastType.error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _busy
+          ? SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Tw.accent,
+                ),
+              ),
+            ),
+          )
+          : IconButton(
+            tooltip: 'تحديث القوائم',
+            onPressed: _run,
+            icon: Icon(Icons.refresh, color: Tw.ink2),
+          );
+}

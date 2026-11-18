@@ -151,7 +151,17 @@ class PayrollService {
     final spreadsheetUrl = meta.url;
 
     final userInfoHash = hashUserInfoRows(allRows);
-    if (cycle.userInfoHash != null &&
+    // Owner's request (3.3.0): after a successful audit, the next one
+    // audits only the new information — users without «مدقق» in this
+    // period (new rows, or users not found before) — and leaves the
+    // audited users' cells, colours and copies as they are. New rows in
+    // the management or agent sheets count, so the unchanged-hash stop of
+    // ERP only applies to a period never audited. [forceReaudit] runs the
+    // whole audit again like ERP.
+    final auditedMemberIds = await db.auditedMemberIds(cycle.id);
+    final incremental = auditedMemberIds.isNotEmpty && !req.forceReaudit;
+    if (!incremental &&
+        cycle.userInfoHash != null &&
         cycle.userInfoHash == userInfoHash &&
         !req.forceReaudit) {
       return PreparedAudit.fail(
@@ -206,10 +216,7 @@ class PayrollService {
       // (the app's audit button only reaches this for linked cycles).
       steps.add({'k': 'createCycleSpreadsheet', 'name': cycle.name});
     }
-    if (sheetNamesOrdered.isNotEmpty) {
-      steps.add({'k': 'addSheets', 'names': sheetNamesOrdered});
-    }
-    final auditedMemberIds = await db.auditedMemberIds(cycle.id);
+    final copies = <Map<String, Object?>>[];
     final cycleMgmtCol = out.cycleMgmtCol;
     for (final title in grouped.order) {
       final items = grouped.byTitle[title]!;
@@ -222,16 +229,50 @@ class PayrollService {
         rows.add(it.managementRow);
       }
       if (rows.isEmpty) continue;
-      steps.add({
+      copies.add({
         'k': 'copy',
         'sheet': titleToSheetName[title],
         'idCol': cycleMgmtCol,
         'rows': rows,
       });
     }
+    // An incremental audit only creates the sheets it copies into.
+    final names =
+        incremental
+            ? [
+              for (final c in copies)
+                if (seenLower.add('+${(c['sheet'] as String).toLowerCase()}'))
+                  c['sheet'] as String,
+            ]
+            : sheetNamesOrdered;
+    if (names.isNotEmpty) steps.add({'k': 'addSheets', 'names': names});
+    steps.addAll(copies);
 
     final writes = salaryStatusColumns(req, out, duplicates);
-    if (writes.salaryValues.isNotEmpty) {
+    final newIds = <String>{
+      for (final r in out.results)
+        if (r.userId.isNotEmpty && !auditedMemberIds.contains(r.userId))
+          r.userId,
+    };
+    if (incremental) {
+      final cells = _newRowCells(
+        writes,
+        mainSheetTitle,
+        rows: {
+          for (final r in out.results)
+            if (newIds.contains(r.userId)) r.rowIndex,
+          for (final d in duplicates) ...d.skippedRows,
+        },
+      );
+      if (cells.isNotEmpty) {
+        steps.add({
+          'k': 'cells',
+          'what': 'الراتب والحالة للمستخدمين الجدد',
+          'ss': spreadsheetId,
+          'data': cells,
+        });
+      }
+    } else if (writes.salaryValues.isNotEmpty) {
       final t = escapeSheetTitleForRange(mainSheetTitle);
       steps.add({
         'k': 'values',
@@ -250,7 +291,7 @@ class PayrollService {
         'values': writes.statusValues,
       });
     }
-    final colors = sourceColors(out);
+    final colors = sourceColors(out, onlyIds: incremental ? newIds : null);
     if (colors.mgmt.isNotEmpty) {
       steps.add({
         'k': 'color',
@@ -265,24 +306,102 @@ class PayrollService {
         'rows': {for (final e in colors.agent.entries) '${e.key}': e.value},
       });
     }
-    steps.add({'k': 'finish'});
+    steps.add({'k': incremental ? 'finishMerge' : 'finish'});
 
-    final summary = buildResult(
+    var summary = buildResult(
       out: out,
       spreadsheetUrl: spreadsheetUrl,
       cycleSynced: cycleSynced,
       localOnly: false,
       duplicates: duplicates,
     );
+    if (incremental && summary.success && (summary.summary?.total ?? 0) > 0) {
+      summary = summary.withMessage(
+        incrementalMessage(
+          out,
+          newIds,
+          before: auditedMemberIds.length,
+          copied: [for (final c in copies) ...(c['rows'] as List)].length,
+        ),
+      );
+    }
     return PreparedAudit.plan(
       AuditPlan(
         cycleId: cycle.id,
         steps: steps,
         next: 0,
         result: summary,
-        finish: finishData(out, userInfoHash),
+        finish:
+            incremental
+                ? {
+                  ...finishData(out, userInfoHash, onlyIds: newIds),
+                  'mode': 'google-incremental',
+                }
+                : finishData(out, userInfoHash),
       ),
     );
+  }
+
+  /// The salary and status cells of [rows] only, as ranges of consecutive
+  /// rows (an incremental audit leaves the other rows as they are).
+  static List<List<Object?>> _newRowCells(
+    ColumnWrites writes,
+    String sheetTitle, {
+    required Set<int> rows,
+  }) {
+    final t = escapeSheetTitleForRange(sheetTitle);
+    final sorted = [
+      for (final r in rows)
+        if (r >= writes.minRow && r <= writes.maxRow) r,
+    ]..sort();
+    final data = <List<Object?>>[];
+    var i = 0;
+    while (i < sorted.length) {
+      var j = i;
+      while (j + 1 < sorted.length && sorted[j + 1] == sorted[j] + 1) {
+        j++;
+      }
+      final a = sorted[i], b = sorted[j];
+      for (final (col, values) in [
+        (writes.salaryColLetter, writes.salaryValues),
+        (writes.statusColLetter, writes.statusValues),
+      ]) {
+        data.add([
+          "'$t'!$col$a:$col$b",
+          values.sublist(a - writes.minRow, b - writes.minRow + 1),
+        ]);
+      }
+      i = j + 1;
+    }
+    return data;
+  }
+
+  /// What an incremental audit did, for the results card.
+  static String incrementalMessage(
+    AuditCoreOutput out,
+    Set<String> newIds, {
+    required int before,
+    required int copied,
+  }) {
+    final agent = <String>{}, mgmt = <String>{}, missing = <String>{};
+    for (final r in out.results) {
+      if (!newIds.contains(r.userId)) continue;
+      if (isAgentType(r.type)) {
+        agent.add(r.userId);
+      } else if (r.type == typeManagement) {
+        mgmt.add(r.userId);
+      } else if (r.type == typeNotFound) {
+        missing.add(r.userId);
+      }
+    }
+    final audited = agent.length + mgmt.length;
+    final kept = 'المدققون من قبل ($before) لم يُعَد تدقيقهم.';
+    if (audited == 0) {
+      return missing.isEmpty
+          ? 'لا توجد معلومات جديدة لتدقيقها. $kept'
+          : 'لا توجد معلومات جديدة مطابقة: أُعيد فحص ${missing.length} غير موجود فقط. $kept';
+    }
+    return 'دُققت المعلومات الجديدة فقط: $audited مستخدم (${agent.length} سحب وكالة، ${mgmt.length} سحب إدارة)${missing.isEmpty ? '' : '، و${missing.length} غير موجود'}، ونُسخ $copied صف إلى جدول الإدارة. $kept';
   }
 
   /// ERP: the chosen user-info sheet, or the first sheet.
@@ -305,6 +424,7 @@ class PayrollService {
         final n = (step['rows'] as List).length;
         return '2/2 نسخ $n صف إلى ورقة «${step['sheet']}»...';
       case 'values':
+      case 'cells':
         return '2/2 كتابة ${step['what']} في جدول بيانات المستخدمين...';
       case 'color':
         final n = (step['rows'] as Map).length;
@@ -415,6 +535,25 @@ class PayrollService {
         );
       case 'copy':
         await _copyStep(cycle, step, index, plan);
+      case 'cells':
+        // Separate ranges of an incremental audit; repeating overwrites
+        // the same cells.
+        final data = [
+          for (final d in (step['data'] as List))
+            (
+              (d as List)[0] as String,
+              [for (final r in (d[1] as List)) List<Object?>.from(r as List)],
+            ),
+        ];
+        for (var i = 0; i < data.length; i += 1000) {
+          final part = data.sublist(
+            i,
+            i + 1000 > data.length ? data.length : i + 1000,
+          );
+          await withSheetsRetry(
+            () => sheets.valuesBatchUpdate(step['ss'] as String, part),
+          );
+        }
       case 'values':
         // One column, rows minRow..maxRow; very long columns are written in
         // parts (each part overwrites the same cells if repeated).
@@ -1283,6 +1422,10 @@ class PayrollService {
         foundInTargetSheetIds: cache?.foundInTargetSheetIds ?? <String>{},
       ),
     );
+    final hash = f['hash'] as String?;
+    if (hash != null && hash.isNotEmpty) {
+      await db.updateCycle(cycle.id, {'payroll_audit_user_info_hash': hash});
+    }
     await db.addAuditRun(
       cycle.id,
       (f['mode'] as String?) ?? 'google',
@@ -1441,11 +1584,13 @@ class PayrollService {
   static ({Map<int, String> mgmt, Map<int, String> agent}) sourceColors(
     AuditCoreOutput out, {
     int? fromRow,
+    Set<String>? onlyIds,
   }) {
     final mgmt = <int, String>{};
     final agent = <int, String>{};
     for (final r in out.results) {
       if (fromRow != null && r.rowIndex < fromRow) continue;
+      if (onlyIds != null && !onlyIds.contains(r.userId)) continue;
       if (isAgentType(r.type) && r.mgmtSheetRowIndex != null) {
         mgmt[r.mgmtSheetRowIndex!] = out.agentColorVal;
       } else if (r.type == typeManagement && r.mgmtSheetRowIndex != null) {
@@ -1466,12 +1611,14 @@ class PayrollService {
     AuditCoreOutput out,
     String userInfoHash, {
     int? fromRow,
+    Set<String>? onlyIds,
   }) {
     final auditedAgent = <String>{};
     final auditedMgmt = <String>{};
     final entries = <Map<String, Object?>>[];
     for (final r in out.results) {
       if (fromRow != null && r.rowIndex < fromRow) continue;
+      if (onlyIds != null && !onlyIds.contains(r.userId)) continue;
       if (isAgentType(r.type) && r.userId.isNotEmpty) {
         auditedAgent.add(r.userId);
       }

@@ -139,6 +139,11 @@ class _SearchPageState extends State<SearchPage> {
       _targetSheets = const [];
       _targetMessage = '— جاري جلب الأوراق —';
     });
+    await _loadTargetSheets();
+  }
+
+  /// The sheets of the cycle's management spreadsheet (also «تحديث القوائم»).
+  Future<void> _loadTargetSheets() async {
     if (_cycleId.isEmpty) return;
     try {
       final sheets = await _s.search.cycleSheets(int.parse(_cycleId));
@@ -707,6 +712,14 @@ class _SearchPageState extends State<SearchPage> {
           final showMgmt = isMgmt || !isAgent;
           return AppSheet(
             title: 'التدقيق الانتقائي',
+            actions: [
+              RefreshAction(
+                onRefresh: () async {
+                  await _loadTargetSheets();
+                  setLocal(() {});
+                },
+              ),
+            ],
             footer: ErpButton(
               label: 'تنفيذ التدقيق الانتقائي',
               loading: _executing,

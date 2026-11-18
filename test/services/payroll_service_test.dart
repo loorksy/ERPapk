@@ -122,6 +122,76 @@ void main() {
     expect(fake.books['cyc']!['وكيل الجنوب']!.length, 1);
   });
 
+  test('after an audit, only the new information is audited', () async {
+    final id = await linkedCycle();
+    final first = await payroll.execute(request(id));
+    expect(first.success, isTrue, reason: first.message);
+    final ui = fake.books['ui']!['Sheet1']!;
+    // The owner edits an audited row by hand, then adds information: a new
+    // user (1004, in the management sheet) and the management and agent
+    // rows of 1009 (not found in the first audit).
+    ui[1][12] = 'يدوي';
+    ui.add(['منى', '0996', '1004', 'وكيل الجنوب']);
+    fake.books['cyc']!['الإدارة']!.add(['1009', 'خالد', 'الشمال', '70']);
+    fake.books['cyc']!['الوكيل']!.add(['1009', 'خالد', '', '70']);
+    fake.colors.clear();
+    final log = fake.log.length;
+
+    final r = await payroll.execute(request(id));
+    expect(r.success, isTrue, reason: r.message);
+    expect(r.message.startsWith('دُققت المعلومات الجديدة فقط'), isTrue);
+    expect(r.message.contains('2 مستخدم (1 سحب وكالة، 1 سحب إدارة)'), isTrue);
+    // Audited users are left as they are.
+    expect(ui[1][12], 'يدوي');
+    // The new information is written, coloured and copied once.
+    expect([ui[4][11], ui[4][12]], ['63', 'سحب وكيل']);
+    expect([ui[5][11], ui[5][12]], ['0', 'سحب ادارة']);
+    expect(fake.colors['cyc|${fake.ids['cyc']!['الإدارة']}'], {
+      4: '#facc15',
+      5: '#8b5cf6',
+    });
+    expect(fake.colors['cyc|${fake.ids['cyc']!['الوكيل']}'], {5: '#8b5cf6'});
+    expect(fake.books['cyc']!['وكيل الجنوب']!.map((e) => e.first), [
+      '1003',
+      '1004',
+    ]);
+    expect(fake.books['cyc']!['وكيل الشمال']!.map((e) => e.first), [
+      'رقم المستخدم',
+      '1001',
+      '1002',
+      '1009',
+    ]);
+    expect(
+      fake.log.skip(log).where((l) => l.startsWith('BATCH VALUES')).length,
+      1,
+    );
+    expect(await db.auditedMemberIds(id), {
+      '1001',
+      '1002',
+      '1003',
+      '1004',
+      '1009',
+    });
+
+    // Nothing new: nothing is written, coloured or copied.
+    final quiet = fake.log.length;
+    final again = await payroll.execute(request(id));
+    expect(again.success, isTrue, reason: again.message);
+    expect(again.message.startsWith('لا توجد معلومات جديدة'), isTrue);
+    expect(
+      fake.log
+          .skip(quiet)
+          .where((l) => l.startsWith('BATCH') || l.startsWith('APPEND')),
+      isEmpty,
+    );
+    // The full audit is still there: it rewrites every row like ERP.
+    final full = await payroll.execute(request(id, force: true));
+    expect(full.success, isTrue);
+    expect(ui[1][12], 'سحب وكيل');
+    expect(fake.books['cyc']!['وكيل الجنوب']!.length, 2);
+    expect(fake.books['cyc']!['وكيل الشمال']!.length, 4);
+  });
+
   test('a cycle from files gets its own Google spreadsheet', () async {
     final id = await db.insertCycle(
       name: 'ملفات',

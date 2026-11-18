@@ -325,6 +325,18 @@ class PayrollPageState extends State<PayrollPage> {
     }
   }
 
+  /// «تحديث القوائم»: the spreadsheets, then the sheets and column names
+  /// of the chosen user-info spreadsheet.
+  Future<void> _refreshGoogleLists() async {
+    await _loadSpreadsheetsList();
+    if (_spreadsheetId.isNotEmpty && _spreadsheetId != _localSource) {
+      await _loadUserInfoSheetsAndColumns(
+        _spreadsheetId,
+        _userInfoSheet.isEmpty ? null : _userInfoSheet,
+      );
+    }
+  }
+
   Future<void> _onSourceChanged(String picked) async {
     var v = picked;
     if (v == pasteLinkValue) {
@@ -509,8 +521,8 @@ class PayrollPageState extends State<PayrollPage> {
   /// ERP `payrollRunAudit`: 1/2 sync (cycle + user-info snapshot), then
   /// 2/2 `payroll-execute`. A file from the phone runs the same audit
   /// locally instead.
-  Future<void> _runAudit() async {
-    final request = await _buildRequest();
+  Future<void> _runAudit({bool full = false}) async {
+    final request = await _buildRequest(full: full);
     if (request == null || !mounted) return;
     final source = request.userInfo;
 
@@ -569,7 +581,7 @@ class PayrollPageState extends State<PayrollPage> {
 
   /// The audit request from the page (cycle, user-info source, columns,
   /// discount and colours); saves the cycle columns like ERP.
-  Future<PayrollRequest?> _buildRequest() async {
+  Future<PayrollRequest?> _buildRequest({bool full = false}) async {
     if (_cycleId.isEmpty || _spreadsheetId.isEmpty) {
       showToast(
         context,
@@ -627,6 +639,9 @@ class PayrollPageState extends State<PayrollPage> {
       userInfoStatusCol: _userInfoStatusCol.isEmpty ? null : _userInfoStatusCol,
       // Owner's request: an empty agency name goes to «غير مذكور».
       emptyTitle: _ws.unmentionedLabel,
+      // Owner's request (3.3.0): a period audited before gets only its new
+      // information audited, unless the full audit is asked for.
+      forceReaudit: full,
     );
     _saveDraft();
     return request;
@@ -877,6 +892,14 @@ class PayrollPageState extends State<PayrollPage> {
       const HelpItem(
         '',
         'تدقيق Google يزامن جداول الفترة وبيانات المستخدمين، ثم ينسخ كل سجل إلى ورقة وكالته في جدول الإدارة، ويكتب الراتب بعد الخصم والحالة، ويلوّن السجلات. يكمل في الخلفية حتى لو أغلقت التطبيق، ويُستأنف من الخطوة نفسها إذا انقطع الإنترنت. التدقيق من ملف يُحسب على الهاتف ولا يكتب شيئًا في Google، وتُصدَّر نتائجه إلى Excel.',
+      ),
+      const HelpItem(
+        '',
+        'بعد أول تدقيق ناجح، «تدقيق المعلومات الجديدة» يدقق فقط من ليس «مدققًا» في الفترة: الصفوف المضافة بعد التدقيق (في بيانات المستخدمين أو الإدارة أو الوكيل)، ومن لم يُعثر عليه من قبل. لا يعيد كتابة رواتب وحالات المدققين ولا تلوينهم ولا نسخهم إلى جدول الإدارة. «تدقيق كامل من البداية» يعيد كل شيء كما في النظام.',
+      ),
+      const HelpItem(
+        '',
+        'زر التحديث ⟳ في أعلى ورقة المصدر وورقة الإعداد يعيد جلب الجداول والأوراق وأسماء الأعمدة من Google دون إغلاق التطبيق.',
       ),
       const HelpItem(
         '',
@@ -1583,7 +1606,10 @@ class PayrollPageState extends State<PayrollPage> {
         ),
         const SizedBox(height: 12),
         ErpButton(
-          label: 'إعادة التدقيق',
+          label:
+              _spreadsheetId == _localSource
+                  ? 'إعادة التدقيق'
+                  : 'تدقيق المعلومات الجديدة',
           icon: Icons.sync,
           kind: ErpButtonKind.indigoSoft,
           loading: _running,
@@ -1591,8 +1617,36 @@ class PayrollPageState extends State<PayrollPage> {
           onPressed:
               _spreadsheetId.isNotEmpty && !_jobRunning ? _runAudit : null,
         ),
+        if (_spreadsheetId != _localSource) ...[
+          const Caption(
+            'يدقق الصفوف الجديدة فقط (ومن لم يُعثر عليه من قبل)، ولا يعيد كتابة أو نسخ أو تلوين من دُقق.',
+            center: true,
+          ),
+          Center(
+            child: TextButton(
+              onPressed:
+                  _spreadsheetId.isNotEmpty && !_jobRunning ? _runFull : null,
+              child: const Text('تدقيق كامل من البداية…'),
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// ERP's audit of every user again (rewrites all salaries, statuses and
+  /// colours; rows already in the management sheets are still not copied
+  /// twice).
+  Future<void> _runFull() async {
+    final ok = await confirmDialog(
+      context,
+      icon: Icons.sync,
+      title: 'تدقيق كامل من البداية',
+      body:
+          'يُعاد تدقيق كل المستخدمين: تُكتب رواتب وحالات الجميع في جدول بيانات المستخدمين وتُلوَّن كل الصفوف من جديد. الصفوف الموجودة في أوراق الإدارة لا تُنسخ مرة ثانية.',
+      confirmLabel: 'تدقيق كامل',
+    );
+    if (ok && mounted) await _runAudit(full: true);
   }
 
   // ------------------------------------------------- follow-up tools
@@ -1688,6 +1742,7 @@ class PayrollPageState extends State<PayrollPage> {
           final local = _spreadsheetId == _localSource;
           return AppSheet(
             title: 'مصدر بيانات المستخدمين',
+            actions: [RefreshAction(onRefresh: _refreshGoogleLists)],
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1782,6 +1837,7 @@ class PayrollPageState extends State<PayrollPage> {
       builder:
           (ctx, _, _) => AppSheet(
             title: 'إعداد التدقيق',
+            actions: [RefreshAction(onRefresh: _refreshGoogleLists)],
             footer: Row(
               children: [
                 ErpButton(

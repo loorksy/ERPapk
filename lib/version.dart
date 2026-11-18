@@ -1,2 +1,2 @@
 /// Shown in Settings; keep in step with `version:` in pubspec.yaml.
-const appVersion = '3.2.1';
+const appVersion = '3.3.0';
