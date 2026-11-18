@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../data/app_database.dart';
+import '../erp/normalize.dart';
 import '../google/sheets_client.dart';
 import 'erp_theme.dart';
 import 'erp_widgets.dart';
@@ -25,8 +26,10 @@ class ColumnsPage extends StatefulWidget {
 class _ColumnsPageState extends State<ColumnsPage> {
   WorkspaceColumns? _c;
   final _label = TextEditingController();
-  final _idCols = TextEditingController();
-  final _labelCols = TextEditingController();
+
+  /// Extra columns of «غير المذكورين», chosen with «+» (owner, 3.3.1).
+  List<String> _idCols = const [];
+  List<String> _labelCols = const [];
   bool _saving = false;
 
   @override
@@ -38,8 +41,6 @@ class _ColumnsPageState extends State<ColumnsPage> {
   @override
   void dispose() {
     _label.dispose();
-    _idCols.dispose();
-    _labelCols.dispose();
     super.dispose();
   }
 
@@ -53,8 +54,8 @@ class _ColumnsPageState extends State<ColumnsPage> {
     setState(() {
       _c = c;
       _label.text = c.unmentionedLabel;
-      _idCols.text = c.unmentionedIdCols.join(', ');
-      _labelCols.text = c.unmentionedLabelCols.join(', ');
+      _idCols = [...c.unmentionedIdCols];
+      _labelCols = [...c.unmentionedLabelCols];
     });
   }
 
@@ -91,16 +92,8 @@ class _ColumnsPageState extends State<ColumnsPage> {
   Future<void> _save() async {
     final c = _c;
     if (c == null) return;
-    final idCols = WorkspaceColumns.parseColumnList(_idCols.text);
-    final labelCols = WorkspaceColumns.parseColumnList(_labelCols.text);
-    if (idCols == null || labelCols == null) {
-      showToast(
-        context,
-        'اكتب حروف أعمدة صحيحة مفصولة بفاصلة (مثل: A, E).',
-        ToastType.error,
-      );
-      return;
-    }
+    final idCols = _idCols;
+    final labelCols = _labelCols;
     final label = _label.text.trim();
     final next = WorkspaceColumns(
       userInfoUserIdCol: c.userInfoUserIdCol,
@@ -137,6 +130,20 @@ class _ColumnsPageState extends State<ColumnsPage> {
     // Back to Settings, like the mockup.
     Navigator.of(context).maybePop();
   }
+
+  String _labelText() =>
+      _label.text.trim().isEmpty ? 'غير مذكور' : _label.text.trim();
+
+  /// The user-info columns that receive the salary and the status (not
+  /// offered for the extra columns).
+  static Set<String> _written(WorkspaceColumns c) => {
+    c.userInfoSalaryCol,
+    c.userInfoStatusCol.isEmpty
+        ? columnIndexToLetter(
+          (columnLetterToIndex(c.userInfoSalaryCol) ?? 10) + 1,
+        )
+        : c.userInfoStatusCol,
+  };
 
   /// One mapping row (`.frow`): label and a compact column picker.
   Widget _pick(
@@ -371,26 +378,39 @@ class _ColumnsPageState extends State<ColumnsPage> {
                               controller: _label,
                               thick: true,
                               maxLength: 60,
+                              onChanged: (_) => setState(() {}),
                             ),
                             block: true,
                           ),
                           FormRow(
-                            'أعمدة إضافية للرقم',
-                            ErpTextField(
-                              controller: _idCols,
-                              thick: true,
-                              hint: 'A',
-                              ltr: true,
+                            'أعمدة إضافية لرقم المستخدم (غير ${c.userInfoUserIdCol})',
+                            ColumnChips(
+                              values: _idCols,
+                              header: _uiHead,
+                              exclude: {
+                                ..._written(c),
+                                c.userInfoTitleCol,
+                                ..._labelCols,
+                              },
+                              emptyText:
+                                  'لا يوجد — يُكتب في ${c.userInfoUserIdCol} فقط',
+                              onChanged: (v) => setState(() => _idCols = v),
                             ),
                             block: true,
                           ),
                           FormRow(
-                            'أعمدة إضافية للنص',
-                            ErpTextField(
-                              controller: _labelCols,
-                              thick: true,
-                              hint: 'E',
-                              ltr: true,
+                            'أعمدة إضافية لكلمة «${_labelText()}» (غير ${c.userInfoTitleCol})',
+                            ColumnChips(
+                              values: _labelCols,
+                              header: _uiHead,
+                              exclude: {
+                                ..._written(c),
+                                c.userInfoUserIdCol,
+                                ..._idCols,
+                              },
+                              emptyText:
+                                  'لا يوجد — تُكتب في ${c.userInfoTitleCol} فقط',
+                              onChanged: (v) => setState(() => _labelCols = v),
                             ),
                             block: true,
                           ),
@@ -407,7 +427,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
                         ],
                       ),
                       after: Caption(
-                        'يلوّن به إجراء «٢. نقل سجلات الإدارة غير الملوّنة» الصفوف التي ينقلها، في ورقة الإدارة ونسخها في «${_label.text.trim().isEmpty ? 'غير مذكور' : _label.text.trim()}» فقط.',
+                        'يلوّن به إجراء «٢. نقل سجلات الإدارة غير الملوّنة» الصفوف التي ينقلها، في ورقة الإدارة ونسخها في «${_labelText()}» فقط.',
                       ),
                     ),
                     Padding(

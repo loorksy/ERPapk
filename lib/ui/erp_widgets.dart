@@ -1182,3 +1182,116 @@ class _RefreshActionState extends State<RefreshAction> {
             icon: Icon(Icons.refresh, color: Tw.ink2),
           );
 }
+
+/// Owner's request (3.3.1): a list of columns chosen with «+ إضافة عمود»
+/// from a dropdown of the sheet's columns («A - رقم المستخدم»), each shown
+/// as a chip that × removes — instead of typing letters. [exclude]: columns
+/// that may not be chosen here.
+class ColumnChips extends StatelessWidget {
+  const ColumnChips({
+    super.key,
+    required this.values,
+    required this.onChanged,
+    this.header = const [],
+    this.exclude = const {},
+    this.emptyText = 'لا يوجد',
+  });
+  final List<String> values;
+  final ValueChanged<List<String>> onChanged;
+  final List<String> header;
+  final Set<String> exclude;
+  final String emptyText;
+
+  @override
+  Widget build(BuildContext context) {
+    final all = columnOptions(header);
+    String name(String v) =>
+        all.where((o) => o.value == v).firstOrNull?.label ?? v;
+    final free = [
+      for (final o in all)
+        if (!values.contains(o.value) && !exclude.contains(o.value)) o,
+    ];
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final v in values)
+          Container(
+            padding: const EdgeInsetsDirectional.fromSTEB(14, 6, 6, 6),
+            decoration: BoxDecoration(
+              color: Tw.accentSoft,
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name(v),
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: Tw.accentInk,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: 'إزالة $v',
+                  child: InkResponse(
+                    radius: 18,
+                    onTap: () => onChanged([...values]..remove(v)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(Icons.close, size: 17, color: Tw.accentInk),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (values.isEmpty)
+          Text(emptyText, style: TextStyle(fontSize: 14.5, color: Tw.ink3)),
+        PopupMenuButton<String>(
+          tooltip: 'إضافة عمود',
+          enabled: free.isNotEmpty,
+          color: Tw.surface,
+          constraints: const BoxConstraints(maxHeight: 420, minWidth: 200),
+          onSelected: (v) => onChanged([...values, v]),
+          itemBuilder:
+              (_) => [
+                for (final o in free)
+                  PopupMenuItem<String>(
+                    value: o.value,
+                    child: Text(
+                      o.label,
+                      style: TextStyle(fontSize: 15, color: Tw.ink),
+                    ),
+                  ),
+              ],
+          child: Container(
+            padding: const EdgeInsetsDirectional.fromSTEB(10, 7, 14, 7),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(color: Tw.rule, width: 1.5),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add, size: 18, color: Tw.accent),
+                const SizedBox(width: 4),
+                Text(
+                  'إضافة عمود',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: Tw.accent,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
