@@ -282,7 +282,7 @@ void main() {
     final id = await linkedCycle();
     final before = await search.searchUser(id, '1001', 0);
     expect(before.success, isFalse);
-    expect(before.message, contains('لم تتم مزامنة الفترة بعد'));
+    expect(before.message, contains('لم تتم مزامنة الدورة بعد'));
     final all = await search.searchAcrossCycles('1001', 0);
     expect(all.success, isFalse);
   });
@@ -294,7 +294,7 @@ void main() {
       final cycles = CycleService(db, () => fake);
       final r = await cycles.syncCycle(id, userInfoSpreadsheetId: 'ui');
       expect(r.success, isTrue, reason: r.message);
-      expect(r.message, 'تمت مزامنة جداول الفترة وبيانات المستخدمين من Google');
+      expect(r.message, 'تمت مزامنة جداول الدورة وبيانات المستخدمين من Google');
       final cycle = await db.getCycle(id);
       expect(cycle!.managementRows.length, mgmt.length);
 
@@ -616,24 +616,31 @@ void main() {
       });
     });
 
-    test('a period with the agent sheet only', () async {
-      final id = await db.insertCycle(
+    test('a cycle made without management is audited without it', () async {
+      // The cycle form: «بدون جدول الإدارة» + the user-info sheet.
+      final cycles = CycleService(db, () => fake);
+      final id = await cycles.createCycle(
         name: 'وكيل فقط',
-        managementRows: const [],
-        agentRows: const [],
         agentSpreadsheetId: 'cyc',
         agentSheetName: 'الوكيل',
+        userInfoSpreadsheetId: 'ui',
+        userInfoSheetName: 'Sheet1',
       );
       final cycle = await db.getCycleInfo(id);
       expect(cycle!.linkedToGoogle, isTrue);
-      final r = await payroll.execute(noMgmt(id));
+      expect(cycle.withoutManagement, isTrue);
+      expect(cycle.userInfoSpreadsheetId, 'ui');
+      expect(cycle.userInfoSheetName, 'Sheet1');
+      // No switch in the request: the cycle decides.
+      final r = await payroll.execute(request(id));
       expect(r.success, isTrue, reason: r.message);
       expect(r.summary!.agent, 2);
+      expect(r.summary!.management, 0);
       expect(r.summary!.notFound, 2);
-      // The current method needs the management sheet and says so.
-      final erp = await payroll.execute(request(id, force: true));
-      expect(erp.success, isFalse);
-      expect(erp.message, PayrollService.noManagementMessage);
+      expect(fake.log.where((l) => l.contains('الإدارة')), isEmpty);
+      // A cycle with a management sheet keeps the ERP audit.
+      final linked = await db.getCycleInfo(await linkedCycle());
+      expect(linked!.withoutManagement, isFalse);
     });
 
     test('the next audit is incremental; «بدون راتب» users are kept', () async {

@@ -47,6 +47,8 @@ class Cycle {
     this.transferDiscountPct = 0,
     this.userInfoHash,
     this.auditClosedAt,
+    this.userInfoSpreadsheetId,
+    this.userInfoSheetName,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -69,12 +71,23 @@ class Cycle {
   final double transferDiscountPct;
   final String? userInfoHash;
   final DateTime? auditClosedAt;
+
+  /// The user-info sheet of the cycle: chosen in the cycle form when it has
+  /// no management sheet (3.4.0), or the last one synced with it.
+  final String? userInfoSpreadsheetId;
+  final String? userInfoSheetName;
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  /// A Google period: its agent sheet is in Google. The management sheet is
-  /// optional since 3.4.0 (audit without the management sheet).
+  /// A Google cycle: its agent sheet is in Google. The management sheet is
+  /// optional since 3.4.0.
   bool get linkedToGoogle => agentSpreadsheetId != null;
+
+  /// A cycle made without a management sheet («بدون جدول الإدارة» in the
+  /// cycle form, owner's request 2026-11-23, 3.4.0) is audited with the
+  /// user-info and agent sheets only (`runPayrollAuditCore(withoutManagement:)`).
+  bool get withoutManagement =>
+      managementSpreadsheetId == null && managementCount == 0;
 
   static Cycle fromRow(
     Map<String, Object?> r, {
@@ -95,6 +108,8 @@ class Cycle {
     transferDiscountPct: (r['transfer_discount_pct'] as num?)?.toDouble() ?? 0,
     userInfoHash: _str(r['payroll_audit_user_info_hash']),
     auditClosedAt: _date(r['payroll_audit_closed_at']),
+    userInfoSpreadsheetId: _str(r['user_info_spreadsheet_id']),
+    userInfoSheetName: _str(r['user_info_sheet_name']),
     createdAt: _date(r['created_at']) ?? DateTime.now(),
     updatedAt: _date(r['updated_at']) ?? DateTime.now(),
   );

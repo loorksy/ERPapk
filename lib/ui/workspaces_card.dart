@@ -51,7 +51,7 @@ class _NameDialogState extends State<_NameDialog> {
             const Padding(
               padding: EdgeInsets.only(bottom: 12),
               child: Text(
-                'لكل مساحة فتراتها وتدقيقها وإعداداتها، منفصلة عن غيرها.',
+                'لكل مساحة دوراتها وتدقيقها وإعداداتها، منفصلة عن غيرها.',
               ),
             ),
           ErpTextField(controller: _c, hint: 'مثال: شركة النور', maxLength: 60),
@@ -132,7 +132,7 @@ class _WorkspacesCardState extends State<WorkspacesCard> {
       iconBg: Tw.red100,
       title: 'حذف مساحة العمل',
       body:
-          'سيُحذف من هذا الهاتف كل ما في «${w.name}»: الفترات وحالات التدقيق والإعدادات وربط الحقول. لا يُحذف أي شيء من Google. لا يمكن التراجع.',
+          'سيُحذف من هذا الهاتف كل ما في «${w.name}»: الدورات وحالات التدقيق والإعدادات وربط الحقول. لا يُحذف أي شيء من Google. لا يمكن التراجع.',
       confirmLabel: 'حذف',
       confirmKind: ErpButtonKind.danger,
     );

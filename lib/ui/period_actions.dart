@@ -10,12 +10,12 @@ import 'erp_widgets.dart';
 import 'sheet_page.dart';
 import 'ui_kit.dart';
 
-/// The ⋯ of a period (owner's mockup): a sheet with «تدقيق الفترة» (outside
-/// the audit screen), «مزامنة الفترة» (Google periods), «تعديل الفترة»,
-/// «إقفال التدقيق» / «إعادة فتح التدقيق» and «حذف الفترة».
+/// The ⋯ of a period (owner's mockup): a sheet with «تدقيق الدورة» (outside
+/// the audit screen), «مزامنة الدورة» (Google periods), «تعديل الدورة»,
+/// «إقفال التدقيق» / «إعادة فتح التدقيق» and «حذف الدورة».
 enum PeriodAction { audit, sync, edit, lock, delete }
 
-String periodName(Cycle c) => c.name.isEmpty ? 'فترة #${c.id}' : c.name;
+String periodName(Cycle c) => c.name.isEmpty ? 'دورة #${c.id}' : c.name;
 
 Future<PeriodAction?> showPeriodMenu(
   BuildContext context,
@@ -44,11 +44,11 @@ Future<PeriodAction?> showPeriodMenu(
             choice(
               PeriodAction.audit,
               Icons.assignment_turned_in_outlined,
-              'تدقيق الفترة',
+              'تدقيق الدورة',
             ),
           if (cycle.linkedToGoogle)
-            choice(PeriodAction.sync, Icons.sync, 'مزامنة الفترة'),
-          choice(PeriodAction.edit, Icons.edit_outlined, 'تعديل الفترة'),
+            choice(PeriodAction.sync, Icons.sync, 'مزامنة الدورة'),
+          choice(PeriodAction.edit, Icons.edit_outlined, 'تعديل الدورة'),
           choice(
             PeriodAction.lock,
             closed ? Icons.lock_open_outlined : Icons.lock_outline,
@@ -57,7 +57,7 @@ Future<PeriodAction?> showPeriodMenu(
           choice(
             PeriodAction.delete,
             Icons.delete_outline,
-            'حذف الفترة',
+            'حذف الدورة',
             danger: true,
           ),
         ],
@@ -103,7 +103,7 @@ Future<bool> runPeriodAction(
     case PeriodAction.audit:
       return false;
     case PeriodAction.sync:
-      showToast(context, 'جاري مزامنة الفترة…', ToastType.info);
+      showToast(context, 'جاري مزامنة الدورة…', ToastType.info);
       final r = await s.cycles.syncCycle(cycle.id);
       if (!context.mounted) return false;
       showToast(
@@ -135,7 +135,7 @@ Future<bool> runPeriodAction(
       final ok = await confirmDialog(
         context,
         icon: Icons.delete_outline,
-        title: 'حذف فترة الرواتب',
+        title: 'حذف الدورة المالية',
         body:
             'سيُحذف «${periodName(cycle)}» من هذا الهاتف مع حالات تدقيقها. لا يُحذف أي شيء من Google، ولا يمكن التراجع.',
         confirmLabel: 'حذف',
@@ -144,7 +144,7 @@ Future<bool> runPeriodAction(
       if (!ok || !context.mounted) return false;
       await s.cycles.deleteCycle(cycle.id);
       if (!context.mounted) return true;
-      showToast(context, 'حُذفت فترة الرواتب', ToastType.success);
+      showToast(context, 'حُذفت الدورة المالية', ToastType.success);
       s.cyclesChanged();
       return true;
   }

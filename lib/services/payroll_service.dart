@@ -92,7 +92,7 @@ class PayrollService {
     final discountRatePct = resolveDiscount(req.discountRate, settings);
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
+      return PreparedAudit.fail(PayrollResult.fail('الدورة المالية غير موجودة'));
     }
 
     final sheets = sheetsProvider();
@@ -103,10 +103,8 @@ class PayrollService {
     final agentSsId = cycle.agentSpreadsheetId;
     final agentSheetNameCycle = cycle.agentSheetName;
 
-    final noMgmt = req.withoutManagement;
-    if (!noMgmt && mgmtSsId == null && agentSsId != null) {
-      return PreparedAudit.fail(PayrollResult.fail(noManagementMessage));
-    }
+    // A cycle without a management sheet is audited without it (3.4.0).
+    final noMgmt = req.withoutManagement || cycle.withoutManagement;
     var cycleSynced = false;
     if (noMgmt && agentSsId != null) {
       // Audit without the management sheet: only the agent sheet is read.
@@ -127,7 +125,7 @@ class PayrollService {
         if (e.transient) rethrow;
       } catch (_) {}
     } else if (mgmtSsId != null && agentSsId != null) {
-      progress('1/2 مزامنة جداول الفترة من Google...');
+      progress('1/2 مزامنة جداول الدورة من Google...');
       try {
         final mgmtResult = await fetchSheetWithFallback(
           sheets,
@@ -205,7 +203,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
-      withoutManagement: req.withoutManagement,
+      withoutManagement: noMgmt,
     );
     final duplicates = findDuplicateGroups(out);
     if (duplicates.isNotEmpty) {
@@ -435,10 +433,6 @@ class PayrollService {
     return 'دُققت المعلومات الجديدة فقط: $audited مستخدم (${agent.length} سحب وكالة، ${mgmt.length} سحب إدارة)${missing.isEmpty ? '' : '، و${missing.length} غير موجود'}، ونُسخ $copied صف إلى جدول الإدارة. $kept';
   }
 
-  /// An ERP-method audit of a period that has no management sheet.
-  static const noManagementMessage =
-      'هذه الفترة بلا جدول إدارة. بدّل «طريقة التدقيق» إلى «بدون الإدارة» في إعداد التدقيق، أو أضف جدول الإدارة من تعديل الفترة.';
-
   /// ERP: the chosen user-info sheet, or the first sheet.
   static String userInfoSheetTitle(SpreadsheetMeta meta, GoogleUserInfo ui) {
     final firstSheet = meta.sheets.isEmpty ? null : meta.sheets.first;
@@ -452,7 +446,7 @@ class PayrollService {
   static String describeStep(Map<String, Object?> step) {
     switch (step['k']) {
       case 'createCycleSpreadsheet':
-        return '2/2 إنشاء جدول Google للفترة...';
+        return '2/2 إنشاء جدول Google للدورة...';
       case 'addSheets':
         return '2/2 إنشاء أوراق الوجهة في جدول الإدارة...';
       case 'copy':
@@ -501,7 +495,7 @@ class PayrollService {
     }
     // Light record (links and sheet names); the data only where needed.
     final info = await db.getCycleInfo(plan.cycleId);
-    if (info == null) throw Exception('فترة الرواتب غير موجودة');
+    if (info == null) throw Exception('الدورة المالية غير موجودة');
     var cycle = info;
     final sheets = sheetsProvider();
     switch (kind) {
@@ -509,10 +503,10 @@ class PayrollService {
         if (cycle.linkedToGoogle) return; // already done before a restart
         cycle = (await db.getCycle(plan.cycleId))!;
         final cycleName =
-            cycle.name.trim().isEmpty ? 'فترة' : cycle.name.trim();
+            cycle.name.trim().isEmpty ? 'دورة' : cycle.name.trim();
         final dateStr = DateTime.now().toIso8601String().substring(0, 10);
         final newId = await withSheetsRetry(
-          () => sheets.createSpreadsheet('فترة $cycleName - $dateStr', const [
+          () => sheets.createSpreadsheet('دورة $cycleName - $dateStr', const [
             'الإدارة',
             'الوكيل',
           ]),
@@ -549,7 +543,7 @@ class PayrollService {
         } on SheetsApiException catch (e) {
           if (e.transient) rethrow;
           throw Exception(
-            'لا يمكن الوصول إلى جدول الإدارة (الفترة). تأكد أن الفترة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
+            'لا يمكن الوصول إلى جدول الإدارة (الدورة). تأكد أن الدورة مرتبطة بجدول في حساب Google المرتبط بالتطبيق: $e',
           );
         }
         final existing = {for (final s in meta.sheets) s.title.toLowerCase()};
@@ -766,7 +760,7 @@ class PayrollService {
     final settings = await db.getPayrollSettings();
     final discountRatePct = resolveDiscount(req.discountRate, settings);
     final cycle = await db.getCycle(req.cycleId);
-    if (cycle == null) return PayrollResult.fail('فترة الرواتب غير موجودة');
+    if (cycle == null) return PayrollResult.fail('الدورة المالية غير موجودة');
     final managementRows = cycle.managementRows;
     final agentRows = cycle.agentRows;
     if (ui.rows.isEmpty) {
@@ -774,15 +768,10 @@ class PayrollService {
     }
     if (managementRows.isEmpty && agentRows.isEmpty) {
       return PayrollResult.fail(
-        'بيانات الإدارة أو الوكيل فارغة. زامن الفترة أو أعد رفع الملفات.',
+        'بيانات الإدارة أو الوكيل فارغة. زامن الدورة أو أعد رفع الملفات.',
       );
     }
-    if (!req.withoutManagement &&
-        managementRows.isEmpty &&
-        cycle.managementSpreadsheetId == null &&
-        cycle.agentSpreadsheetId != null) {
-      return PayrollResult.fail(noManagementMessage);
-    }
+    final noMgmt = req.withoutManagement || cycle.withoutManagement;
     progress('تدقيق على الهاتف...');
     final allRows = ui.rows;
     final userInfoHash = hashUserInfoRows(allRows);
@@ -803,7 +792,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
-      withoutManagement: req.withoutManagement,
+      withoutManagement: noMgmt,
     );
     final duplicates = findDuplicateGroups(out);
     final skipped = {for (final d in duplicates) ...d.skippedRows};
@@ -943,16 +932,14 @@ class PayrollService {
     final ui = req.userInfo as GoogleUserInfo;
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
+      return PreparedAudit.fail(PayrollResult.fail('الدورة المالية غير موجودة'));
     }
     if (!cycle.linkedToGoogle) {
       return PreparedAudit.fail(
-        PayrollResult.fail('هذه العملية متاحة لفترات Google فقط.'),
+        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
       );
     }
-    if (!req.withoutManagement && cycle.managementSpreadsheetId == null) {
-      return PreparedAudit.fail(PayrollResult.fail(noManagementMessage));
-    }
+    final noMgmt = req.withoutManagement || cycle.withoutManagement;
     final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
     final colTitle = columnLetterToIndex(req.columns.userInfoTitleCol) ?? 3;
     if (colId == colTitle) {
@@ -1038,7 +1025,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
-      withoutManagement: req.withoutManagement,
+      withoutManagement: noMgmt,
     );
     final grouped = groupByTitle(out, {
       for (final r in out.results)
@@ -1173,12 +1160,12 @@ class PayrollService {
     final ui = req.userInfo as GoogleUserInfo;
     final cycle = await db.getCycle(req.cycleId);
     if (cycle == null) {
-      return PreparedAudit.fail(PayrollResult.fail('فترة الرواتب غير موجودة'));
+      return PreparedAudit.fail(PayrollResult.fail('الدورة المالية غير موجودة'));
     }
     final mgmtSsId = cycle.managementSpreadsheetId;
     if (!cycle.linkedToGoogle || mgmtSsId == null) {
       return PreparedAudit.fail(
-        PayrollResult.fail('هذه العملية متاحة لفترات Google فقط.'),
+        PayrollResult.fail('هذه العملية متاحة لدورات Google فقط.'),
       );
     }
     final sheets = sheetsProvider();

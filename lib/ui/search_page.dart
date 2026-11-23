@@ -151,7 +151,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _targetSheets = sheets;
         _targetMessage =
-            sheets.isEmpty ? 'لا توجد أوراق في جدول الإدارة لهذه الفترة' : null;
+            sheets.isEmpty ? 'لا توجد أوراق في جدول الإدارة لهذه الدورة' : null;
       });
     } catch (e) {
       if (mounted) setState(() => _targetMessage = e.toString());
@@ -162,7 +162,7 @@ class _SearchPageState extends State<SearchPage> {
     if (_cycleId.isEmpty) {
       showToast(
         context,
-        'اختر الفترة التي تريد تدقيق المستخدم فيها',
+        'اختر الدورة التي تريد تدقيق المستخدم فيها',
         ToastType.error,
       );
       return;
@@ -211,7 +211,7 @@ class _SearchPageState extends State<SearchPage> {
         .firstWhere((n) => n != null && n.isNotEmpty, orElse: () => null);
     if (name != null) b.writeln('الاسم: $name');
     for (final h in o.hits) {
-      if (_global0) b.writeln('— الفترة: ${h.cycleName}');
+      if (_global0) b.writeln('— الدورة: ${h.cycleName}');
       b.writeln('التصنيف: ${h.logicalStatus}');
       b.writeln('الراتب قبل الخصم: ${jsNumberToString(h.salaryBefore)}');
       b.writeln('الراتب بعد الخصم: ${jsNumberToString(h.salaryAfter)}');
@@ -293,7 +293,7 @@ class _SearchPageState extends State<SearchPage> {
                 children: [
                   Expanded(
                     child: SegmentedChoice(
-                      options: const ['هذه الفترة', 'كل الفترات'],
+                      options: const ['هذه الدورة', 'كل الدورات'],
                       selected: _global ? 1 : 0,
                       onChanged: (i) {
                         setState(() => _global = i == 1);
@@ -311,13 +311,13 @@ class _SearchPageState extends State<SearchPage> {
                   thick: true,
                   options:
                       _cycles.isEmpty
-                          ? const [SelectOption('', '— لا توجد فترات —')]
+                          ? const [SelectOption('', '— لا توجد دورات —')]
                           : [
-                            const SelectOption('', '— اختر الفترة —'),
+                            const SelectOption('', '— اختر الدورة —'),
                             for (final c in _cycles)
                               SelectOption(
                                 '${c.id}',
-                                c.name.isEmpty ? 'فترة #${c.id}' : c.name,
+                                c.name.isEmpty ? 'دورة #${c.id}' : c.name,
                               ),
                           ],
                   value: _cycleId,
@@ -645,7 +645,7 @@ class _SearchPageState extends State<SearchPage> {
                   ],
                 ),
               ),
-              if (_global0) StatusBadge('${o.hits.length} فترة'),
+              if (_global0) StatusBadge('${o.hits.length} دورة'),
             ],
           ),
         ),
@@ -741,7 +741,7 @@ class _SearchPageState extends State<SearchPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'للمستخدم ${ltr(memberId)} في «${cycle == null ? '' : (cycle.name.isEmpty ? 'فترة #${cycle.id}' : cycle.name)}». اختر ورقة في جدول الإدارة، أو اكتب اسمًا لإنشاء ورقة جديدة. يُلحق صف الإدارة بها ويُلوَّن.',
+                  'للمستخدم ${ltr(memberId)} في «${cycle == null ? '' : (cycle.name.isEmpty ? 'دورة #${cycle.id}' : cycle.name)}». اختر ورقة في جدول الإدارة، أو اكتب اسمًا لإنشاء ورقة جديدة. يُلحق صف الإدارة بها ويُلوَّن.',
                   style: TextStyle(fontSize: 14.5, height: 1.7, color: Tw.ink2),
                 ),
                 const SizedBox(height: 14),

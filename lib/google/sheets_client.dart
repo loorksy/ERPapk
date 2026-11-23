@@ -399,7 +399,7 @@ class GoogleSheetsApi implements SheetsApi {
     );
     final id = json['spreadsheetId'] as String?;
     if (id == null || id.isEmpty) {
-      throw SheetsApiException('فشل إنشاء جدول الفترة في Google');
+      throw SheetsApiException('فشل إنشاء جدول الدورة في Google');
     }
     return id;
   }

@@ -143,13 +143,14 @@ class PayrollPageState extends State<PayrollPage> {
     await _loadSettings();
     await _loadCycles();
     if (!mounted) return;
-    // Opening the period loads it from the phone; «مزامنة الفترة» (⋯)
+    // Opening the period loads it from the phone; «مزامنة الدورة» (⋯)
     // reads Google again, and the audit itself syncs first like ERP.
     setState(() => _optionsVisible = true);
     if (!await _restoreDraft()) {
       await _loadSpreadsheetsList();
       await _loadCycleColumns();
     }
+    await _useCycleUserInfo();
     await _refreshSession();
     await _watchJob();
   }
@@ -291,7 +292,7 @@ class PayrollPageState extends State<PayrollPage> {
 
   Future<void> _setSession(bool close) async {
     if (_cycleId.isEmpty) {
-      showToast(context, 'اختر الفترة أولاً', ToastType.error);
+      showToast(context, 'اختر الدورة أولاً', ToastType.error);
       return;
     }
     await _s.db.setAuditClosed(int.parse(_cycleId), close);
@@ -597,7 +598,7 @@ class PayrollPageState extends State<PayrollPage> {
     if (_cycleId.isEmpty || _spreadsheetId.isEmpty) {
       showToast(
         context,
-        'اختر الفترة ومصدر بيانات المستخدمين أولاً',
+        'اختر الدورة ومصدر بيانات المستخدمين أولاً',
         ToastType.error,
       );
       return null;
@@ -654,8 +655,8 @@ class PayrollPageState extends State<PayrollPage> {
       // Owner's request (3.3.0): a period audited before gets only its new
       // information audited, unless the full audit is asked for.
       forceReaudit: full,
-      // Owner's request (3.4.0): «طريقة التدقيق» of the workspace.
-      withoutManagement: _ws.auditWithoutMgmt,
+      // Owner's request (3.4.0): a cycle without a management sheet.
+      withoutManagement: _noMgmt,
     );
     _saveDraft();
     return request;
@@ -674,7 +675,7 @@ class PayrollPageState extends State<PayrollPage> {
     if (!(_cycle?.linkedToGoogle ?? false)) {
       showToast(
         context,
-        'هذا الإجراء متاح لفترات Google فقط.',
+        'هذا الإجراء متاح لدورات Google فقط.',
         ToastType.warning,
       );
       return;
@@ -726,8 +727,8 @@ class PayrollPageState extends State<PayrollPage> {
     }
     setState(() => _result = result);
     var toast = result.message;
-    if (result.cycleSynced && !toast.contains('تمت مزامنة جداول الفترة')) {
-      toast = 'تمت مزامنة جداول الفترة من Google ثم $toast';
+    if (result.cycleSynced && !toast.contains('تمت مزامنة جداول الدورة')) {
+      toast = 'تمت مزامنة جداول الدورة من Google ثم $toast';
     }
     if (result.duplicates.isNotEmpty) {
       toast +=
@@ -873,22 +874,28 @@ class PayrollPageState extends State<PayrollPage> {
   /// Rebuilds the open sheets (source, settings) with the page.
   final _tick = ValueNotifier<int>(0);
 
-  /// «طريقة التدقيق» is a workspace setting: saved at once (3.4.0).
-  Future<void> _setAuditMethod(bool withoutMgmt) async {
-    if (withoutMgmt == _ws.auditWithoutMgmt) return;
-    final services = AppScope.read(context);
-    final next = (await services.db.getWorkspaceColumns()).withAuditWithoutMgmt(
-      withoutMgmt,
-    );
-    await services.db.saveWorkspaceColumns(next);
-    if (!mounted) return;
-    setState(() => _ws = next);
-    showToast(
-      context,
-      withoutMgmt ? 'طريقة التدقيق: بدون الإدارة' : 'طريقة التدقيق: مع الإدارة',
-      ToastType.success,
+  /// A cycle made without a management sheet carries its user-info sheet
+  /// (chosen in the cycle form, 3.4.0): the audit starts from it.
+  Future<void> _useCycleUserInfo() async {
+    final c = _cycle;
+    final ss = c?.userInfoSpreadsheetId;
+    if (c == null || !c.withoutManagement || ss == null || !mounted) return;
+    if (_spreadsheetId == ss && _userInfoSheet == (c.userInfoSheetName ?? '')) {
+      return;
+    }
+    setState(() {
+      _spreadsheetId = ss;
+      _userInfoSheet = c.userInfoSheetName ?? '';
+    });
+    await _loadUserInfoSheetsAndColumns(
+      ss,
+      _userInfoSheet.isEmpty ? null : _userInfoSheet,
     );
   }
+
+  /// A cycle made without a management sheet is audited without it
+  /// (3.4.0, decided in the cycle form).
+  bool get _noMgmt => _cycle?.withoutManagement ?? false;
 
   @override
   void setState(VoidCallback fn) {
@@ -914,7 +921,7 @@ class PayrollPageState extends State<PayrollPage> {
     return [
       const HelpItem(
         '',
-        'طريقة التدقيق (في «إعداد التدقيق» وفي «ربط حقول البيانات»، والافتراضي «مع الإدارة» كما في النظام): «بدون الإدارة» تدقق بجدولي بيانات المستخدمين والوكيل فقط. من له راتب في الوكيل «سحب وكالة» ويُكتب راتبه بعد الخصم، ومن رقمه في الوكيل وراتبه 0 «بدون راتب» (الراتب 0)، ومن ليس في الوكيل «غير موجود». لا يُقرأ جدول الإدارة ولا يُنسخ شيء إلى أوراق الوكالات، وتُلوَّن صفوف الوكيل فقط. أداة «٢. نقل سجلات الإدارة» تظهر مع «مع الإدارة» فقط.',
+        'الدورة بلا جدول إدارة (اختيار «بدون جدول الإدارة» عند إنشائها أو تعديلها) تُدقق بجدولي بيانات المستخدمين والوكيل فقط، وتبدأ بجدول بيانات المستخدمين المختار معها. من له راتب في الوكيل «سحب وكالة» ويُكتب راتبه بعد الخصم، ومن رقمه في الوكيل وراتبه 0 «بدون راتب» (الراتب 0)، ومن ليس في الوكيل «غير موجود». لا يُنسخ شيء إلى أوراق الوكالات، وتُلوَّن صفوف الوكيل فقط، وأداة «٢. نقل سجلات الإدارة» لا تظهر',
       ),
       const HelpItem(
         '',
@@ -926,11 +933,11 @@ class PayrollPageState extends State<PayrollPage> {
       ),
       const HelpItem(
         '',
-        'تدقيق Google يزامن جداول الفترة وبيانات المستخدمين، ثم ينسخ كل سجل إلى ورقة وكالته في جدول الإدارة، ويكتب الراتب بعد الخصم والحالة، ويلوّن السجلات. يكمل في الخلفية حتى لو أغلقت التطبيق، ويُستأنف من الخطوة نفسها إذا انقطع الإنترنت. التدقيق من ملف يُحسب على الهاتف ولا يكتب شيئًا في Google، وتُصدَّر نتائجه إلى Excel.',
+        'تدقيق Google يزامن جداول الدورة وبيانات المستخدمين، ثم ينسخ كل سجل إلى ورقة وكالته في جدول الإدارة، ويكتب الراتب بعد الخصم والحالة، ويلوّن السجلات. يكمل في الخلفية حتى لو أغلقت التطبيق، ويُستأنف من الخطوة نفسها إذا انقطع الإنترنت. التدقيق من ملف يُحسب على الهاتف ولا يكتب شيئًا في Google، وتُصدَّر نتائجه إلى Excel.',
       ),
       const HelpItem(
         '',
-        'بعد أول تدقيق ناجح، «تدقيق المعلومات الجديدة» يدقق فقط من ليس «مدققًا» في الفترة: الصفوف المضافة بعد التدقيق (في بيانات المستخدمين أو الإدارة أو الوكيل)، ومن لم يُعثر عليه من قبل. لا يعيد كتابة رواتب وحالات المدققين ولا تلوينهم ولا نسخهم إلى جدول الإدارة. «تدقيق كامل من البداية» يعيد كل شيء كما في النظام.',
+        'بعد أول تدقيق ناجح، «تدقيق المعلومات الجديدة» يدقق فقط من ليس «مدققًا» في الدورة: الصفوف المضافة بعد التدقيق (في بيانات المستخدمين أو الإدارة أو الوكيل)، ومن لم يُعثر عليه من قبل. لا يعيد كتابة رواتب وحالات المدققين ولا تلوينهم ولا نسخهم إلى جدول الإدارة. «تدقيق كامل من البداية» يعيد كل شيء كما في النظام.',
       ),
       const HelpItem(
         '',
@@ -946,7 +953,7 @@ class PayrollPageState extends State<PayrollPage> {
       ),
       const HelpItem(
         '',
-        '«إقفال التدقيق» من «⋯» يعلّم الفترة كمنتهية على هذا الجهاز، ويمكن إعادة فتحه في أي وقت.',
+        '«إقفال التدقيق» من «⋯» يعلّم الدورة كمنتهية على هذا الجهاز، ويمكن إعادة فتحه في أي وقت.',
       ),
     ];
   }
@@ -1019,7 +1026,7 @@ class PayrollPageState extends State<PayrollPage> {
     ),
   );
 
-  /// `.topbar`: «الفترات» back link, «؟» and ⋯.
+  /// `.topbar`: «الدورات» back link, «؟» and ⋯.
   Widget _topBar(Cycle? cycle) => SizedBox(
     height: 54,
     child: Padding(
@@ -1029,14 +1036,14 @@ class PayrollPageState extends State<PayrollPage> {
           TextButton.icon(
             onPressed: () => Navigator.of(context).maybePop(),
             icon: const Icon(Icons.chevron_right, size: 22),
-            label: const Text('الفترات', style: TextStyle(fontSize: 16)),
+            label: const Text('الدورات', style: TextStyle(fontSize: 16)),
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               minimumSize: const Size(44, 44),
             ),
           ),
           const Spacer(),
-          HelpButton(title: 'تدقيق الفترة', items: _help),
+          HelpButton(title: 'تدقيق الدورة', items: _help),
           if (cycle != null)
             PeriodMenu(
               cycle: cycle,
@@ -1110,7 +1117,7 @@ class PayrollPageState extends State<PayrollPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'التدقيق مُقفل لهذه الفترة',
+                'التدقيق مُقفل لهذه الدورة',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
@@ -1118,7 +1125,7 @@ class PayrollPageState extends State<PayrollPage> {
                 ),
               ),
               Text(
-                'علامة على هذا الهاتف بأن الفترة انتهت. النتائج والأدوات متاحة.',
+                'علامة على هذا الهاتف بأن الدورة انتهت. النتائج والأدوات متاحة.',
                 style: TextStyle(fontSize: 13, color: Tw.ink2),
               ),
             ],
@@ -1210,7 +1217,7 @@ class PayrollPageState extends State<PayrollPage> {
         leading: IconChip(Icons.tune),
         title: 'إعداد التدقيق',
         subtitle: Text(
-          _ws.auditWithoutMgmt
+          _noMgmt
               ? 'بدون الإدارة، الوكيل ${ltr('$_cycleAgentUserIdCol/$_cycleAgentSalaryCol')}، المستخدم $_userInfoUserIdCol، الراتب $_userInfoSalaryCol، خصم ${_discountText()}'
               : 'الإدارة $_cycleMgmtUserIdCol، الوكيل ${ltr('$_cycleAgentUserIdCol/$_cycleAgentSalaryCol')}، المستخدم $_userInfoUserIdCol، الراتب $_userInfoSalaryCol، خصم ${_discountText()}',
         ),
@@ -1219,7 +1226,7 @@ class PayrollPageState extends State<PayrollPage> {
           children: [
             ColorDots([
               hexColor(_agentColor),
-              if (!_ws.auditWithoutMgmt) hexColor(_mgmtColor),
+              if (!_noMgmt) hexColor(_mgmtColor),
             ]),
             const SizedBox(width: 6),
             const RowChevron(),
@@ -1381,8 +1388,8 @@ class PayrollPageState extends State<PayrollPage> {
     final r = _result!;
     final s = r.summary;
     var msg = r.message;
-    if (r.cycleSynced && !msg.contains('تمت مزامنة جداول الفترة')) {
-      msg = 'تمت مزامنة جداول الفترة من Google ثم $msg';
+    if (r.cycleSynced && !msg.contains('تمت مزامنة جداول الدورة')) {
+      msg = 'تمت مزامنة جداول الدورة من Google ثم $msg';
     }
     final when = _job?.updatedAt;
     // The result shown is the one of the latest job, which may be one of
@@ -1468,7 +1475,7 @@ class PayrollPageState extends State<PayrollPage> {
                 (typeAgent, s.agent, agent),
                 // 3.4.0: «بدون راتب» replaces «سحب إدارة» in an audit
                 // without the management sheet.
-                if (s.noSalary > 0 || s.management == 0 && _ws.auditWithoutMgmt)
+                if (s.noSalary > 0 || s.management == 0 && _noMgmt)
                   (typeNoSalary, s.noSalary, Tw.slate400)
                 else
                   (typeManagement, s.management, mgmt),
@@ -1754,7 +1761,7 @@ class PayrollPageState extends State<PayrollPage> {
               '١. تدقيق غير المذكورين',
               'إضافة أرقام الوكيل الناقصة بعنوان «$label» ثم تدقيقها',
             ),
-            if (!_ws.auditWithoutMgmt)
+            if (!_noMgmt)
               tool(
                 JobKind.unmentionedMgmt,
                 Icons.swap_horiz,
@@ -1817,7 +1824,7 @@ class PayrollPageState extends State<PayrollPage> {
                   NoticeBox(
                     bg: Tw.warnSoft,
                     child: Text(
-                      'هذه الفترة من ملفات محلية، فالتدقيق على Google يحتاج فترة مرتبطة بجداول Google. يمكنك التدقيق من ملف على الجهاز.',
+                      'هذه الدورة من ملفات محلية، فالتدقيق على Google يحتاج دورة مرتبطة بجداول Google. يمكنك التدقيق من ملف على الجهاز.',
                       style: TextStyle(color: Tw.warn),
                     ),
                   ),
@@ -1905,25 +1912,13 @@ class PayrollPageState extends State<PayrollPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SheetLabel('طريقة التدقيق', first: true),
-                SegmentedChoice(
-                  options: const ['مع الإدارة', 'بدون الإدارة'],
-                  selected: _ws.auditWithoutMgmt ? 1 : 0,
-                  onChanged: (i) => _setAuditMethod(i == 1),
-                ),
-                Caption(
-                  _ws.auditWithoutMgmt
-                      ? 'بجدولي بيانات المستخدمين والوكيل فقط: من له راتب في الوكيل «سحب وكالة»، ومن رقمه في الوكيل وراتبه 0 «بدون راتب»، ومن ليس في الوكيل «غير موجود». لا نسخ إلى أوراق الوكالات.'
-                      : 'كما في النظام: الإدارة والوكيل وبيانات المستخدمين، مع النسخ إلى أوراق الوكالات.',
-                ),
                 SheetLabel(
-                  _ws.auditWithoutMgmt
-                      ? 'جدول الوكيل'
-                      : 'جدولا الإدارة والوكيل',
+                  _noMgmt ? 'جدول الوكيل' : 'جدولا الإدارة والوكيل',
+                  first: true,
                 ),
                 FormRows(
                   children: [
-                    if (!_ws.auditWithoutMgmt)
+                    if (!_noMgmt)
                       _colRow(
                         'رقم المستخدم (الإدارة)',
                         _cycleMgmtCols,
@@ -2040,7 +2035,7 @@ class PayrollPageState extends State<PayrollPage> {
                         },
                       ),
                     ),
-                    if (!_ws.auditWithoutMgmt)
+                    if (!_noMgmt)
                       FormRow(
                         'لون الإدارة',
                         ColorSwatchButton(
@@ -2383,13 +2378,13 @@ class PayrollPageState extends State<PayrollPage> {
                   ),
                   if (r.sampleMgmtIds.isNotEmpty)
                     FormRow(
-                      'عمود المستخدم في جدول الإدارة (الفترة)',
+                      'عمود المستخدم في جدول الإدارة (الدورة)',
                       Text(list(r.sampleMgmtIds), style: Ds.secondary),
                       block: true,
                     ),
                   if (r.sampleAgentIds.isNotEmpty)
                     FormRow(
-                      'عمود المستخدم في جدول الوكيل (الفترة)',
+                      'عمود المستخدم في جدول الوكيل (الدورة)',
                       Text(list(r.sampleAgentIds), style: Ds.secondary),
                       block: true,
                     ),

@@ -75,8 +75,10 @@ class CycleService {
     String? agentSpreadsheetId,
     String? agentSheetName,
     double? transferDiscountPct,
+    String? userInfoSpreadsheetId,
+    String? userInfoSheetName,
   }) async {
-    if (name.trim().isEmpty) throw Exception('أدخل اسم الفترة');
+    if (name.trim().isEmpty) throw Exception('أدخل اسم الدورة');
     var mRows = managementRows;
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
@@ -89,7 +91,7 @@ class CycleService {
       aRows = await readSheetFromGoogle(aSs, agentSheetName);
     }
     final tdp = (transferDiscountPct ?? 0).clamp(0, 100).toDouble();
-    return db.insertCycle(
+    final id = await db.insertCycle(
       name: name.trim(),
       managementRows: mRows,
       agentRows: aRows,
@@ -99,6 +101,14 @@ class CycleService {
       agentSheetName: agentSheetName,
       transferDiscountPct: tdp,
     );
+    final uiSs = _clean(userInfoSpreadsheetId);
+    if (uiSs != null) {
+      await db.updateCycle(id, {
+        'user_info_spreadsheet_id': uiSs,
+        'user_info_sheet_name': _clean(userInfoSheetName),
+      });
+    }
+    return id;
   }
 
   /// ERP `PUT /cycles/:id`.
@@ -112,9 +122,11 @@ class CycleService {
     required String? agentSpreadsheetId,
     required String? agentSheetName,
     double? transferDiscountPct,
+    String? userInfoSpreadsheetId,
+    String? userInfoSheetName,
   }) async {
     final existing = await db.getCycleInfo(id);
-    if (existing == null) throw Exception('الفترة غير موجودة');
+    if (existing == null) throw Exception('الدورة غير موجودة');
     var mRows = managementRows;
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
@@ -136,6 +148,10 @@ class CycleService {
       'agent_sheet_name': _clean(agentSheetName),
       if (transferDiscountPct != null)
         'transfer_discount_pct': transferDiscountPct.clamp(0, 100).toDouble(),
+      if (_clean(userInfoSpreadsheetId) != null) ...{
+        'user_info_spreadsheet_id': _clean(userInfoSpreadsheetId),
+        'user_info_sheet_name': _clean(userInfoSheetName),
+      },
     });
   }
 
@@ -153,7 +169,7 @@ class CycleService {
       return SyncOutcome(false, e.message, null, e.transient);
     } catch (e) {
       final m = e.toString();
-      return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الفترة من Google' : m);
+      return SyncOutcome(false, m.isEmpty ? 'فشلت مزامنة الدورة من Google' : m);
     }
   }
 
@@ -163,13 +179,13 @@ class CycleService {
     String? userInfoSheetName,
   ) async {
     final cycle = await db.getCycleInfo(id);
-    if (cycle == null) return const SyncOutcome(false, 'الفترة غير موجودة');
+    if (cycle == null) return const SyncOutcome(false, 'الدورة غير موجودة');
     final mgmtSsId = cycle.managementSpreadsheetId;
     final agentSsId = cycle.agentSpreadsheetId;
     if (agentSsId == null) {
       return const SyncOutcome(
         false,
-        'هذه الفترة غير مرتبطة بجداول Google. أنشئ فترة جديدة من شاشة الفترات مصدرها Google Sheets ثم احفظها لتفعيل المزامنة.',
+        'هذه الدورة غير مرتبطة بجداول Google. أنشئ دورة جديدة من شاشة الدورات مصدرها Google Sheets ثم احفظها لتفعيل المزامنة.',
       );
     }
     final sheets = sheetsProvider();
@@ -238,8 +254,8 @@ class CycleService {
     return SyncOutcome(
       true,
       userInfoSynced
-          ? 'تمت مزامنة جداول الفترة وبيانات المستخدمين من Google'
-          : 'تمت مزامنة جداول الفترة من Google',
+          ? 'تمت مزامنة جداول الدورة وبيانات المستخدمين من Google'
+          : 'تمت مزامنة جداول الدورة من Google',
       detail,
     );
   }

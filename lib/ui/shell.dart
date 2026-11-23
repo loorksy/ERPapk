@@ -163,7 +163,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   );
 
   static const _labels = [
-    'الفترات',
+    'الدورات',
     'التسويات',
     'فرز',
     'الاستعلام',
@@ -226,7 +226,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                     ? FloatingActionButton.extended(
                       onPressed: () => _periods.currentState?.openCreate(),
                       icon: const Icon(Icons.add, size: 22),
-                      label: const Text('فترة جديدة'),
+                      label: const Text('دورة جديدة'),
                     )
                     : null,
             bottomNavigationBar: DecoratedBox(

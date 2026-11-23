@@ -40,7 +40,7 @@ String formatArabicDate(DateTime d) {
   return '${l.day} ${_months[l.month - 1]} ${l.year}';
 }
 
-/// «فترات الرواتب» (ERP «Sheet»), from the owner's mockup: the latest
+/// «الدورات المالية» (ERP «Sheet»), from the owner's mockup: the latest
 /// period on top as a card with its status, the outcome strip and one
 /// button; the other periods below as rows with a small strip. The create
 /// window is [CycleModal].
@@ -50,7 +50,7 @@ class SheetPage extends StatefulWidget {
   /// Opens the audit screen of a period.
   final ValueChanged<int>? onAudit;
 
-  /// The number of periods (the frame shows «فترة جديدة» when there are
+  /// The number of periods (the frame shows «دورة جديدة» when there are
   /// some; the welcome state has its own button).
   final ValueChanged<int>? onCount;
 
@@ -169,7 +169,7 @@ class SheetPageState extends State<SheetPage> {
     }
   }
 
-  /// «فترة جديدة».
+  /// «دورة جديدة».
   void openCreate() => _openModal();
 
   /// After returning from a period's audit screen.
@@ -200,7 +200,7 @@ class SheetPageState extends State<SheetPage> {
       child: ListView(
         padding: const EdgeInsets.only(bottom: 96),
         children: [
-          ScreenHeader(title: 'فترات الرواتب', help: () => periodsHelp),
+          ScreenHeader(title: 'الدورات المالية', help: () => periodsHelp),
           if (cycles == null)
             const Padding(
               padding: EdgeInsets.all(48),
@@ -216,9 +216,9 @@ class SheetPageState extends State<SheetPage> {
               ),
               title: 'مرحبًا بك في المدقق',
               message:
-                  'ابدأ بإنشاء فترة رواتب: اربط جدول الإدارة وجدول الوكيل من Google Sheets أو من ملفات Excel / CSV، ثم دقّقها من هنا.',
+                  'ابدأ بإنشاء دورة مالية: اربط جدول الإدارة (أو «بدون جدول الإدارة» مع جدول بيانات المستخدمين) وجدول الوكيل من Google Sheets أو من ملفات Excel / CSV، ثم دقّقها من هنا.',
               action: ErpButton(
-                label: 'إنشاء فترة رواتب',
+                label: 'إنشاء دورة مالية',
                 icon: Icons.add,
                 expand: false,
                 onPressed: _openModal,
@@ -235,7 +235,7 @@ class SheetPageState extends State<SheetPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SectionLabel('الفترات السابقة'),
+                    const SectionLabel('الدورات السابقة'),
                     GroupList(
                       inset: 70,
                       children: [for (final c in cycles.skip(1)) _row(c)],
@@ -296,7 +296,7 @@ class SheetPageState extends State<SheetPage> {
             TextSpan(text: formatCount(c.agentCount), style: bold),
           ],
         ),
-        i.state == PeriodState.audited ? 'عرض النتائج' : 'تدقيق الفترة',
+        i.state == PeriodState.audited ? 'عرض النتائج' : 'تدقيق الدورة',
       ),
     };
     return Container(
@@ -424,6 +424,15 @@ class _CycleModalState extends State<CycleModal> {
   String _agentSheet = '';
   List<String> _mgmtSheets = const [];
   List<String> _agentSheets = const [];
+
+  /// «بدون جدول الإدارة» in the management list (owner's request
+  /// 2026-11-23, 3.4.0): the cycle is audited with the user-info and agent
+  /// sheets only, and its user-info sheet is chosen here.
+  static const _noMgmtValue = '__no_management__';
+  bool get _noMgmt => _mgmtSs == _noMgmtValue;
+  String _uiSs = '';
+  String _uiSheet = '';
+  List<String> _uiSheets = const [];
   ImportedFile? _mgmtFile;
   ImportedFile? _agentFile;
   Rows _currentMgmt = const [];
@@ -461,6 +470,14 @@ class _CycleModalState extends State<CycleModal> {
       _mgmtSs = e.managementSpreadsheetId!;
       await _loadSheets(true, _mgmtSs);
       _mgmtSheet = e.managementSheetName ?? '';
+    } else if (e.agentSpreadsheetId != null) {
+      _mgmtSs = _noMgmtValue;
+      final ui = e.userInfoSpreadsheetId;
+      if (ui != null) {
+        _uiSs = ui;
+        await _loadUiSheets(ui);
+        _uiSheet = e.userInfoSheetName ?? '';
+      }
     }
     if (e.agentSpreadsheetId != null) {
       _agentSs = e.agentSpreadsheetId!;
@@ -493,8 +510,20 @@ class _CycleModalState extends State<CycleModal> {
     }
   }
 
-  Future<void> _loadSheets(bool mgmt, String id) async {
+  Future<void> _loadUiSheets(String id) async {
     if (id.isEmpty) {
+      setState(() => _uiSheets = const []);
+      return;
+    }
+    try {
+      final meta = await _s.sheets.getSpreadsheet(id);
+      if (!mounted) return;
+      setState(() => _uiSheets = [for (final s in meta.sheets) s.title]);
+    } catch (_) {}
+  }
+
+  Future<void> _loadSheets(bool mgmt, String id) async {
+    if (id.isEmpty || id == _noMgmtValue) {
       setState(() => mgmt ? _mgmtSheets = const [] : _agentSheets = const []);
       return;
     }
@@ -522,11 +551,17 @@ class _CycleModalState extends State<CycleModal> {
     }
     final known = {for (final f in _files) f.id};
     return [
-      SelectOption('', mgmt ? '— بدون جدول إدارة —' : '— اختر الجدول —'),
+      const SelectOption('', '— اختر الجدول —'),
+      if (mgmt) const SelectOption(_noMgmtValue, 'بدون جدول الإدارة'),
       const SelectOption(pasteLinkValue, pasteLinkLabel),
       for (final f in _files) SelectOption(f.id, f.name),
-      if (_mgmtSs.isNotEmpty && !known.contains(_mgmtSs))
+      if (_mgmtSs.isNotEmpty && !_noMgmt && !known.contains(_mgmtSs))
         SelectOption(_mgmtSs, _mgmtSs),
+      if (_uiSs.isNotEmpty &&
+          !known.contains(_uiSs) &&
+          _uiSs != _mgmtSs &&
+          _uiSs != _agentSs)
+        SelectOption(_uiSs, _uiSs),
       if (_agentSs.isNotEmpty &&
           !known.contains(_agentSs) &&
           _agentSs != _mgmtSs)
@@ -563,18 +598,22 @@ class _CycleModalState extends State<CycleModal> {
   }
 
   Future<void> _fetchFromGoogle() async {
-    if (_agentSs.isEmpty) {
-      showToast(
-        context,
-        'اختر جدول الوكيل من القائمة (جدول الإدارة اختياري)',
-        ToastType.error,
-      );
+    final problem =
+        _mgmtSs.isEmpty
+            ? 'اختر جدول الإدارة، أو «بدون جدول الإدارة»'
+            : _agentSs.isEmpty
+            ? 'اختر جدول الوكيل من القائمة'
+            : _noMgmt && _uiSs.isEmpty
+            ? 'اختر جدول بيانات المستخدمين'
+            : null;
+    if (problem != null) {
+      showToast(context, problem, ToastType.error);
       return;
     }
     setState(() => _busy = true);
     try {
       final (m, a) = await _s.cycles.importFromGoogle(
-        managementSpreadsheetId: _mgmtSs.isEmpty ? null : _mgmtSs,
+        managementSpreadsheetId: _noMgmt ? null : _mgmtSs,
         managementSheetName: _mgmtSheet,
         agentSpreadsheetId: _agentSs,
         agentSheetName: _agentSheet,
@@ -622,14 +661,17 @@ class _CycleModalState extends State<CycleModal> {
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
-      showToast(context, 'أدخل اسم الفترة', ToastType.error);
+      showToast(context, 'أدخل اسم الدورة', ToastType.error);
       return;
     }
     setState(() => _saving = true);
     try {
       final tdpRaw = _discount.text.trim();
       final tdp = tdpRaw.isEmpty ? null : jsParseFloat(tdpRaw);
-      var mSs = _mgmtSs.isEmpty ? null : _mgmtSs;
+      var mSs = _mgmtSs.isEmpty || _noMgmt ? null : _mgmtSs;
+      // The user-info sheet is saved with a cycle without management.
+      final uiSs = _googleTab && _noMgmt && _uiSs.isNotEmpty ? _uiSs : null;
+      final uiSheet = uiSs == null ? null : _uiSheet;
       var aSs = _agentSs.isEmpty ? null : _agentSs;
       Rows? mRows;
       Rows? aRows;
@@ -656,6 +698,8 @@ class _CycleModalState extends State<CycleModal> {
           agentSpreadsheetId: aSs,
           agentSheetName: aSs == null ? null : _agentSheet,
           transferDiscountPct: tdp == null || tdp.isNaN ? 0 : tdp,
+          userInfoSpreadsheetId: uiSs,
+          userInfoSheetName: uiSheet,
         );
       } else {
         await _s.cycles.updateCycle(
@@ -668,12 +712,14 @@ class _CycleModalState extends State<CycleModal> {
           agentSpreadsheetId: aSs,
           agentSheetName: aSs == null ? null : _agentSheet,
           transferDiscountPct: tdp == null || tdp.isNaN ? null : tdp,
+          userInfoSpreadsheetId: uiSs,
+          userInfoSheetName: uiSheet,
         );
       }
       if (!mounted) return;
       showToast(
         context,
-        edit == null ? 'حُفظت فترة الرواتب' : 'حُدّثت فترة الرواتب',
+        edit == null ? 'حُفظت الدورة المالية' : 'حُدّثت الدورة المالية',
         ToastType.success,
       );
       Navigator.pop(context, true);
@@ -694,7 +740,7 @@ class _CycleModalState extends State<CycleModal> {
     final failed =
         _googleTab && _listMessage != null && !_listMessage!.contains('جاري');
     return AppSheet(
-      title: widget.edit == null ? 'فترة رواتب جديدة' : 'تعديل فترة الرواتب',
+      title: widget.edit == null ? 'دورة مالية جديدة' : 'تعديل الدورة المالية',
       actions: [
         if (_googleTab)
           RefreshAction(
@@ -702,9 +748,10 @@ class _CycleModalState extends State<CycleModal> {
               await _loadSpreadsheets();
               await _loadSheets(true, _mgmtSs);
               await _loadSheets(false, _agentSs);
+              if (_noMgmt) await _loadUiSheets(_uiSs);
             },
           ),
-        HelpButton(title: 'فترة الرواتب', items: () => newPeriodHelp),
+        HelpButton(title: 'الدورة المالية', items: () => newPeriodHelp),
       ],
       footer:
           _showSave
@@ -755,9 +802,15 @@ class _CycleModalState extends State<CycleModal> {
                   ),
                 ),
               ),
-            // 3.4.0: the management sheet is optional (audit without it).
-            const SheetLabel('جدول الإدارة (اختياري)'),
+            const SheetLabel('جدول الإدارة'),
             _ssPair(true),
+            if (_noMgmt) ...[
+              const SheetLabel('جدول بيانات المستخدمين'),
+              _uiPair(),
+              const Caption(
+                'بدون جدول الإدارة: تُدقق الدورة بجدولي بيانات المستخدمين والوكيل فقط. من له راتب في الوكيل «سحب وكالة»، ومن رقمه في الوكيل وراتبه 0 «بدون راتب»، ومن ليس في الوكيل «غير موجود»، ولا يُنسخ شيء إلى أوراق الوكالات.',
+              ),
+            ],
             const SheetLabel('جدول الوكيل'),
             _ssPair(false),
           ] else ...[
@@ -822,19 +875,61 @@ class _CycleModalState extends State<CycleModal> {
             },
           ),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 10,
-          child: ErpSelect<String>(
-            options: _sheetOptions(sheets, sheet),
-            value: sheet,
-            onChanged:
-                (v) => setState(() => mgmt ? _mgmtSheet = v : _agentSheet = v),
+        if (!(mgmt && _noMgmt)) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 10,
+            child: ErpSelect<String>(
+              options: _sheetOptions(sheets, sheet),
+              value: sheet,
+              onChanged:
+                  (v) =>
+                      setState(() => mgmt ? _mgmtSheet = v : _agentSheet = v),
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
+
+  /// The user-info spreadsheet and sheet of a cycle without management.
+  Widget _uiPair() => Row(
+    children: [
+      Expanded(
+        flex: 14,
+        child: ErpSelect<String>(
+          options: _ssOptions(),
+          value: _uiSs,
+          onChanged: (picked) async {
+            var v = picked;
+            if (v == pasteLinkValue) {
+              final f = await askSpreadsheetLink(context, _s.sheets);
+              if (f == null || !mounted) return;
+              setState(() {
+                _files = [f, ..._files.where((x) => x.id != f.id)];
+                _listMessage = null;
+              });
+              v = f.id;
+            }
+            setState(() {
+              _uiSs = v;
+              _uiSheet = '';
+            });
+            _loadUiSheets(v);
+          },
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        flex: 10,
+        child: ErpSelect<String>(
+          options: _sheetOptions(_uiSheets, _uiSheet),
+          value: _uiSheet,
+          onChanged: (v) => setState(() => _uiSheet = v),
+        ),
+      ),
+    ],
+  );
 
   /// `.filepick`.
   Widget _filePicker(bool mgmt) {
@@ -934,7 +1029,7 @@ class _CycleModalState extends State<CycleModal> {
           ),
         ),
         const SizedBox(height: 16),
-        const FieldHeader('اسم الفترة'),
+        const FieldHeader('اسم الدورة'),
         ErpTextField(controller: _name, hint: 'مثال: رواتب يناير 2026'),
         const SizedBox(height: 12),
         const FieldHeader('نسبة خصم التحويل (%)'),
@@ -945,7 +1040,7 @@ class _CycleModalState extends State<CycleModal> {
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
         ),
         const Caption(
-          'تُحفظ مع الفترة. خصم التدقيق نفسه يُحدَّد من «إعداد التدقيق».',
+          'تُحفظ مع الدورة. خصم التدقيق نفسه يُحدَّد من «إعداد التدقيق».',
         ),
       ],
     );
