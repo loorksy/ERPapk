@@ -74,7 +74,7 @@ class _PeriodInfo {
   final PeriodState state;
   final AuditJob? job;
 
-  /// total, agent, management, notFound.
+  /// total, agent, management, notFound, noSalary.
   final List<int>? counts;
   final Color? agentColor;
   final Color? mgmtColor;
@@ -85,6 +85,7 @@ class _PeriodInfo {
           : [
             (counts![1], agentColor),
             (counts![2], mgmtColor),
+            if (counts!.length > 4) (counts![4], Tw.slate400),
             (counts![3], null),
           ];
 }
@@ -511,7 +512,7 @@ class _CycleModalState extends State<CycleModal> {
     } catch (_) {}
   }
 
-  List<SelectOption<String>> _ssOptions() {
+  List<SelectOption<String>> _ssOptions({bool mgmt = false}) {
     final msg = _listMessage;
     if (msg != null) {
       return [
@@ -521,7 +522,7 @@ class _CycleModalState extends State<CycleModal> {
     }
     final known = {for (final f in _files) f.id};
     return [
-      const SelectOption('', '— اختر الجدول —'),
+      SelectOption('', mgmt ? '— بدون جدول إدارة —' : '— اختر الجدول —'),
       const SelectOption(pasteLinkValue, pasteLinkLabel),
       for (final f in _files) SelectOption(f.id, f.name),
       if (_mgmtSs.isNotEmpty && !known.contains(_mgmtSs))
@@ -562,10 +563,10 @@ class _CycleModalState extends State<CycleModal> {
   }
 
   Future<void> _fetchFromGoogle() async {
-    if (_mgmtSs.isEmpty || _agentSs.isEmpty) {
+    if (_agentSs.isEmpty) {
       showToast(
         context,
-        'اختر جدول الإدارة وجدول الوكيل من القائمة',
+        'اختر جدول الوكيل من القائمة (جدول الإدارة اختياري)',
         ToastType.error,
       );
       return;
@@ -573,7 +574,7 @@ class _CycleModalState extends State<CycleModal> {
     setState(() => _busy = true);
     try {
       final (m, a) = await _s.cycles.importFromGoogle(
-        managementSpreadsheetId: _mgmtSs,
+        managementSpreadsheetId: _mgmtSs.isEmpty ? null : _mgmtSs,
         managementSheetName: _mgmtSheet,
         agentSpreadsheetId: _agentSs,
         agentSheetName: _agentSheet,
@@ -595,8 +596,8 @@ class _CycleModalState extends State<CycleModal> {
       setState(() => mgmt ? _mgmtFile = f : _agentFile = f);
       final m = _mgmtFile;
       final a = _agentFile;
-      if (_showSave && m != null && a != null) {
-        _showSavePanel(m.firstSheetRows, a.firstSheetRows);
+      if (_showSave && a != null) {
+        _showSavePanel(m?.firstSheetRows ?? const [], a.firstSheetRows);
       }
     } catch (e) {
       if (mounted) showToast(context, e.toString(), ToastType.error);
@@ -606,11 +607,15 @@ class _CycleModalState extends State<CycleModal> {
   void _uploadFiles() {
     final m = _mgmtFile;
     final a = _agentFile;
-    if (m == null || a == null) {
-      showToast(context, 'اختر ملف الإدارة وملف الوكيل', ToastType.error);
+    if (a == null) {
+      showToast(
+        context,
+        'اختر ملف الوكيل (ملف الإدارة اختياري)',
+        ToastType.error,
+      );
       return;
     }
-    _showSavePanel(m.firstSheetRows, a.firstSheetRows);
+    _showSavePanel(m?.firstSheetRows ?? const [], a.firstSheetRows);
     showToast(context, 'تم قراءة الملفات', ToastType.success);
   }
 
@@ -629,12 +634,14 @@ class _CycleModalState extends State<CycleModal> {
       Rows? mRows;
       Rows? aRows;
       final haveRows = _currentMgmt.isNotEmpty || _currentAgent.isNotEmpty;
-      if ((mSs == null || aSs == null) && haveRows) {
+      // A Google period needs its agent sheet; the management sheet is
+      // optional (3.4.0). Without an agent sheet the rows are from files.
+      if ((aSs == null || !_googleTab) && haveRows) {
         mRows = _currentMgmt;
         aRows = _currentAgent;
         mSs = null;
         aSs = null;
-      } else if (mSs != null && aSs != null && _googleTab && haveRows) {
+      } else if (aSs != null && _googleTab && haveRows) {
         mRows = _currentMgmt;
         aRows = _currentAgent;
       }
@@ -748,12 +755,13 @@ class _CycleModalState extends State<CycleModal> {
                   ),
                 ),
               ),
-            const SheetLabel('جدول الإدارة'),
+            // 3.4.0: the management sheet is optional (audit without it).
+            const SheetLabel('جدول الإدارة (اختياري)'),
             _ssPair(true),
             const SheetLabel('جدول الوكيل'),
             _ssPair(false),
           ] else ...[
-            const SheetLabel('ملف جدول الإدارة'),
+            const SheetLabel('ملف جدول الإدارة (اختياري)'),
             _filePicker(true),
             const SheetLabel('ملف جدول الوكيل'),
             _filePicker(false),
@@ -788,7 +796,7 @@ class _CycleModalState extends State<CycleModal> {
         Expanded(
           flex: 14,
           child: ErpSelect<String>(
-            options: _ssOptions(),
+            options: _ssOptions(mgmt: mgmt),
             value: ss,
             onChanged: (picked) async {
               var v = picked;

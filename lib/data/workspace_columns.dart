@@ -19,6 +19,7 @@ class WorkspaceColumns {
     this.unmentionedIdCols = const ['A'],
     this.unmentionedLabelCols = const ['E'],
     this.unmentionedColor = defaultUnmentionedColor,
+    this.auditWithoutMgmt = false,
   });
 
   /// Orange: different from the agent (violet) and management (yellow)
@@ -64,6 +65,28 @@ class WorkspaceColumns {
   /// management sheet and on their copies), owner's request 2026-11-17.
   final String unmentionedColor;
 
+  /// «طريقة التدقيق» (owner's request 2026-11-23, 3.4.0): false = the
+  /// ERP audit with the management sheet (default); true = the user-info
+  /// and agent sheets only (`runPayrollAuditCore(withoutManagement:)`).
+  final bool auditWithoutMgmt;
+
+  WorkspaceColumns withAuditWithoutMgmt(bool v) => WorkspaceColumns(
+    userInfoUserIdCol: userInfoUserIdCol,
+    userInfoTitleCol: userInfoTitleCol,
+    userInfoSalaryCol: userInfoSalaryCol,
+    userInfoStatusCol: userInfoStatusCol,
+    mgmtUserIdCol: mgmtUserIdCol,
+    agentUserIdCol: agentUserIdCol,
+    agentSalaryCol: agentSalaryCol,
+    agentNameCol: agentNameCol,
+    mgmtShareCol: mgmtShareCol,
+    unmentionedLabel: unmentionedLabel,
+    unmentionedIdCols: unmentionedIdCols,
+    unmentionedLabelCols: unmentionedLabelCols,
+    unmentionedColor: unmentionedColor,
+    auditWithoutMgmt: v,
+  );
+
   static const storageKey = 'workspaceColumnsV1';
 
   Map<String, Object?> toJson() => {
@@ -80,6 +103,7 @@ class WorkspaceColumns {
     'unmentionedIdCols': unmentionedIdCols,
     'unmentionedLabelCols': unmentionedLabelCols,
     'unmentionedColor': unmentionedColor,
+    'auditWithoutMgmt': auditWithoutMgmt,
   };
 
   static WorkspaceColumns fromJson(Object? j) {
@@ -119,6 +143,7 @@ class WorkspaceColumns {
         d.unmentionedLabelCols,
       ),
       unmentionedColor: _color(j['unmentionedColor']),
+      auditWithoutMgmt: j['auditWithoutMgmt'] == true,
     );
   }
 

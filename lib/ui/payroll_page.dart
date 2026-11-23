@@ -654,6 +654,8 @@ class PayrollPageState extends State<PayrollPage> {
       // Owner's request (3.3.0): a period audited before gets only its new
       // information audited, unless the full audit is asked for.
       forceReaudit: full,
+      // Owner's request (3.4.0): «طريقة التدقيق» of the workspace.
+      withoutManagement: _ws.auditWithoutMgmt,
     );
     _saveDraft();
     return request;
@@ -871,6 +873,23 @@ class PayrollPageState extends State<PayrollPage> {
   /// Rebuilds the open sheets (source, settings) with the page.
   final _tick = ValueNotifier<int>(0);
 
+  /// «طريقة التدقيق» is a workspace setting: saved at once (3.4.0).
+  Future<void> _setAuditMethod(bool withoutMgmt) async {
+    if (withoutMgmt == _ws.auditWithoutMgmt) return;
+    final services = AppScope.read(context);
+    final next = (await services.db.getWorkspaceColumns()).withAuditWithoutMgmt(
+      withoutMgmt,
+    );
+    await services.db.saveWorkspaceColumns(next);
+    if (!mounted) return;
+    setState(() => _ws = next);
+    showToast(
+      context,
+      withoutMgmt ? 'طريقة التدقيق: بدون الإدارة' : 'طريقة التدقيق: مع الإدارة',
+      ToastType.success,
+    );
+  }
+
   @override
   void setState(VoidCallback fn) {
     super.setState(fn);
@@ -893,6 +912,10 @@ class PayrollPageState extends State<PayrollPage> {
   List<HelpItem> _help() {
     final label = _ws.unmentionedLabel;
     return [
+      const HelpItem(
+        '',
+        'طريقة التدقيق (في «إعداد التدقيق» وفي «ربط حقول البيانات»، والافتراضي «مع الإدارة» كما في النظام): «بدون الإدارة» تدقق بجدولي بيانات المستخدمين والوكيل فقط. من له راتب في الوكيل «سحب وكالة» ويُكتب راتبه بعد الخصم، ومن رقمه في الوكيل وراتبه 0 «بدون راتب» (الراتب 0)، ومن ليس في الوكيل «غير موجود». لا يُقرأ جدول الإدارة ولا يُنسخ شيء إلى أوراق الوكالات، وتُلوَّن صفوف الوكيل فقط. أداة «٢. نقل سجلات الإدارة» تظهر مع «مع الإدارة» فقط.',
+      ),
       const HelpItem(
         '',
         'اختر مصدر بيانات المستخدمين: جدولًا من Google Sheets أو ملفًا من الجهاز، أو الصق رابط جدول Google. يُحفظ اختيارك على الهاتف.',
@@ -1187,12 +1210,17 @@ class PayrollPageState extends State<PayrollPage> {
         leading: IconChip(Icons.tune),
         title: 'إعداد التدقيق',
         subtitle: Text(
-          'الإدارة $_cycleMgmtUserIdCol، الوكيل ${ltr('$_cycleAgentUserIdCol/$_cycleAgentSalaryCol')}، المستخدم $_userInfoUserIdCol، الراتب $_userInfoSalaryCol، خصم ${_discountText()}',
+          _ws.auditWithoutMgmt
+              ? 'بدون الإدارة، الوكيل ${ltr('$_cycleAgentUserIdCol/$_cycleAgentSalaryCol')}، المستخدم $_userInfoUserIdCol، الراتب $_userInfoSalaryCol، خصم ${_discountText()}'
+              : 'الإدارة $_cycleMgmtUserIdCol، الوكيل ${ltr('$_cycleAgentUserIdCol/$_cycleAgentSalaryCol')}، المستخدم $_userInfoUserIdCol، الراتب $_userInfoSalaryCol، خصم ${_discountText()}',
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ColorDots([hexColor(_agentColor), hexColor(_mgmtColor)]),
+            ColorDots([
+              hexColor(_agentColor),
+              if (!_ws.auditWithoutMgmt) hexColor(_mgmtColor),
+            ]),
             const SizedBox(width: 6),
             const RowChevron(),
           ],
@@ -1430,6 +1458,7 @@ class PayrollPageState extends State<PayrollPage> {
               parts: [
                 (s.agent, agent),
                 (s.management, mgmt),
+                (s.noSalary, Tw.slate400),
                 (s.notFound, null),
               ],
             ),
@@ -1437,7 +1466,12 @@ class PayrollPageState extends State<PayrollPage> {
             ResultLegend(
               items: [
                 (typeAgent, s.agent, agent),
-                (typeManagement, s.management, mgmt),
+                // 3.4.0: «بدون راتب» replaces «سحب إدارة» in an audit
+                // without the management sheet.
+                if (s.noSalary > 0 || s.management == 0 && _ws.auditWithoutMgmt)
+                  (typeNoSalary, s.noSalary, Tw.slate400)
+                else
+                  (typeManagement, s.management, mgmt),
                 (typeNotFound, s.notFound, null),
               ],
             ),
@@ -1720,12 +1754,13 @@ class PayrollPageState extends State<PayrollPage> {
               '١. تدقيق غير المذكورين',
               'إضافة أرقام الوكيل الناقصة بعنوان «$label» ثم تدقيقها',
             ),
-            tool(
-              JobKind.unmentionedMgmt,
-              Icons.swap_horiz,
-              '٢. نقل سجلات الإدارة غير الملوّنة',
-              'إلى «$label» إن كان فيها مبلغ في ${_ws.mgmtShareCol}',
-            ),
+            if (!_ws.auditWithoutMgmt)
+              tool(
+                JobKind.unmentionedMgmt,
+                Icons.swap_horiz,
+                '٢. نقل سجلات الإدارة غير الملوّنة',
+                'إلى «$label» إن كان فيها مبلغ في ${_ws.mgmtShareCol}',
+              ),
           ],
         ),
         if (!google)
@@ -1870,15 +1905,31 @@ class PayrollPageState extends State<PayrollPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SheetLabel('جدولا الإدارة والوكيل', first: true),
+                const SheetLabel('طريقة التدقيق', first: true),
+                SegmentedChoice(
+                  options: const ['مع الإدارة', 'بدون الإدارة'],
+                  selected: _ws.auditWithoutMgmt ? 1 : 0,
+                  onChanged: (i) => _setAuditMethod(i == 1),
+                ),
+                Caption(
+                  _ws.auditWithoutMgmt
+                      ? 'بجدولي بيانات المستخدمين والوكيل فقط: من له راتب في الوكيل «سحب وكالة»، ومن رقمه في الوكيل وراتبه 0 «بدون راتب»، ومن ليس في الوكيل «غير موجود». لا نسخ إلى أوراق الوكالات.'
+                      : 'كما في النظام: الإدارة والوكيل وبيانات المستخدمين، مع النسخ إلى أوراق الوكالات.',
+                ),
+                SheetLabel(
+                  _ws.auditWithoutMgmt
+                      ? 'جدول الوكيل'
+                      : 'جدولا الإدارة والوكيل',
+                ),
                 FormRows(
                   children: [
-                    _colRow(
-                      'رقم المستخدم (الإدارة)',
-                      _cycleMgmtCols,
-                      _cycleMgmtUserIdCol,
-                      (v) => setState(() => _cycleMgmtUserIdCol = v),
-                    ),
+                    if (!_ws.auditWithoutMgmt)
+                      _colRow(
+                        'رقم المستخدم (الإدارة)',
+                        _cycleMgmtCols,
+                        _cycleMgmtUserIdCol,
+                        (v) => setState(() => _cycleMgmtUserIdCol = v),
+                      ),
                     _colRow(
                       'رقم المستخدم (الوكيل)',
                       _cycleAgentCols,
@@ -1989,16 +2040,17 @@ class PayrollPageState extends State<PayrollPage> {
                         },
                       ),
                     ),
-                    FormRow(
-                      'لون الإدارة',
-                      ColorSwatchButton(
-                        value: _mgmtColor,
-                        onChanged: (v) {
-                          setState(() => _mgmtColor = v);
-                          _saveDraft();
-                        },
+                    if (!_ws.auditWithoutMgmt)
+                      FormRow(
+                        'لون الإدارة',
+                        ColorSwatchButton(
+                          value: _mgmtColor,
+                          onChanged: (v) {
+                            setState(() => _mgmtColor = v);
+                            _saveDraft();
+                          },
+                        ),
                       ),
-                    ),
                   ],
                 ),
                 const Caption(
@@ -2044,8 +2096,10 @@ class PayrollPageState extends State<PayrollPage> {
             ? 'agent'
             : type == typeManagement
             ? 'mgmt'
+            : type == typeNoSalary
+            ? 'nosal'
             : 'none';
-    final counts = {'agent': 0, 'mgmt': 0, 'none': 0};
+    final counts = {'agent': 0, 'mgmt': 0, 'nosal': 0, 'none': 0};
     for (final row in r.results) {
       counts[cat(row.type)] = counts[cat(row.type)]! + 1;
     }
@@ -2092,7 +2146,10 @@ class PayrollPageState extends State<PayrollPage> {
                       children: [
                         chip('all', 'الكل', r.results.length),
                         chip('agent', typeAgent, counts['agent']!),
-                        chip('mgmt', typeManagement, counts['mgmt']!),
+                        if (counts['mgmt']! > 0 || counts['nosal']! == 0)
+                          chip('mgmt', typeManagement, counts['mgmt']!),
+                        if (counts['nosal']! > 0)
+                          chip('nosal', typeNoSalary, counts['nosal']!),
                         chip('none', typeNotFound, counts['none']!),
                       ],
                     ),

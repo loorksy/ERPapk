@@ -103,8 +103,30 @@ class PayrollService {
     final agentSsId = cycle.agentSpreadsheetId;
     final agentSheetNameCycle = cycle.agentSheetName;
 
+    final noMgmt = req.withoutManagement;
+    if (!noMgmt && mgmtSsId == null && agentSsId != null) {
+      return PreparedAudit.fail(PayrollResult.fail(noManagementMessage));
+    }
     var cycleSynced = false;
-    if (mgmtSsId != null && agentSsId != null) {
+    if (noMgmt && agentSsId != null) {
+      // Audit without the management sheet: only the agent sheet is read.
+      progress('1/2 مزامنة جدول الوكيل من Google...');
+      try {
+        final agentResult = await fetchSheetWithFallback(
+          sheets,
+          agentSsId,
+          agentSheetNameCycle,
+        );
+        agentRows = agentResult.values;
+        await db.updateCycle(cycle.id, {
+          'agent_data': agentRows,
+          'agent_sheet_name': agentResult.sheetTitleUsed ?? agentSheetNameCycle,
+        });
+        cycleSynced = true;
+      } on SheetsApiException catch (e) {
+        if (e.transient) rethrow;
+      } catch (_) {}
+    } else if (mgmtSsId != null && agentSsId != null) {
       progress('1/2 مزامنة جداول الفترة من Google...');
       try {
         final mgmtResult = await fetchSheetWithFallback(
@@ -183,6 +205,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
+      withoutManagement: req.withoutManagement,
     );
     final duplicates = findDuplicateGroups(out);
     if (duplicates.isNotEmpty) {
@@ -212,7 +235,7 @@ class PayrollService {
     ];
 
     final steps = <Map<String, Object?>>[];
-    if (mgmtSsId == null || agentSsId == null) {
+    if (noMgmt ? agentSsId == null : (mgmtSsId == null || agentSsId == null)) {
       // ERP creates a spreadsheet for a cycle built from uploaded files
       // (the app's audit button only reaches this for linked cycles).
       steps.add({'k': 'createCycleSpreadsheet', 'name': cycle.name});
@@ -385,6 +408,7 @@ class PayrollService {
     required int copied,
   }) {
     final agent = <String>{}, mgmt = <String>{}, missing = <String>{};
+    final noSalary = <String>{};
     for (final r in out.results) {
       if (!newIds.contains(r.userId)) continue;
       if (isAgentType(r.type)) {
@@ -393,17 +417,27 @@ class PayrollService {
         mgmt.add(r.userId);
       } else if (r.type == typeNotFound) {
         missing.add(r.userId);
+      } else if (r.type == typeNoSalary) {
+        noSalary.add(r.userId);
       }
     }
-    final audited = agent.length + mgmt.length;
+    final audited = agent.length + mgmt.length + noSalary.length;
     final kept = 'المدققون من قبل ($before) لم يُعَد تدقيقهم.';
     if (audited == 0) {
       return missing.isEmpty
           ? 'لا توجد معلومات جديدة لتدقيقها. $kept'
           : 'لا توجد معلومات جديدة مطابقة: أُعيد فحص ${missing.length} غير موجود فقط. $kept';
     }
+    // Audit without the management sheet (3.4.0): nothing is copied.
+    if (out.mgmtDataRows.isEmpty && mgmt.isEmpty && copied == 0) {
+      return 'دُققت المعلومات الجديدة فقط: $audited مستخدم (${agent.length} سحب وكالة، ${noSalary.length} بدون راتب)${missing.isEmpty ? '' : '، و${missing.length} غير موجود'}. $kept';
+    }
     return 'دُققت المعلومات الجديدة فقط: $audited مستخدم (${agent.length} سحب وكالة، ${mgmt.length} سحب إدارة)${missing.isEmpty ? '' : '، و${missing.length} غير موجود'}، ونُسخ $copied صف إلى جدول الإدارة. $kept';
   }
+
+  /// An ERP-method audit of a period that has no management sheet.
+  static const noManagementMessage =
+      'هذه الفترة بلا جدول إدارة. بدّل «طريقة التدقيق» إلى «بدون الإدارة» في إعداد التدقيق، أو أضف جدول الإدارة من تعديل الفترة.';
 
   /// ERP: the chosen user-info sheet, or the first sheet.
   static String userInfoSheetTitle(SpreadsheetMeta meta, GoogleUserInfo ui) {
@@ -743,6 +777,12 @@ class PayrollService {
         'بيانات الإدارة أو الوكيل فارغة. زامن الفترة أو أعد رفع الملفات.',
       );
     }
+    if (!req.withoutManagement &&
+        managementRows.isEmpty &&
+        cycle.managementSpreadsheetId == null &&
+        cycle.agentSpreadsheetId != null) {
+      return PayrollResult.fail(noManagementMessage);
+    }
     progress('تدقيق على الهاتف...');
     final allRows = ui.rows;
     final userInfoHash = hashUserInfoRows(allRows);
@@ -763,6 +803,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
+      withoutManagement: req.withoutManagement,
     );
     final duplicates = findDuplicateGroups(out);
     final skipped = {for (final d in duplicates) ...d.skippedRows};
@@ -909,6 +950,9 @@ class PayrollService {
         PayrollResult.fail('هذه العملية متاحة لفترات Google فقط.'),
       );
     }
+    if (!req.withoutManagement && cycle.managementSpreadsheetId == null) {
+      return PreparedAudit.fail(PayrollResult.fail(noManagementMessage));
+    }
     final colId = columnLetterToIndex(req.columns.userInfoUserIdCol) ?? 2;
     final colTitle = columnLetterToIndex(req.columns.userInfoTitleCol) ?? 3;
     if (colId == colTitle) {
@@ -994,6 +1038,7 @@ class PayrollService {
       agentColor: req.agentColor,
       managementColor: req.managementColor,
       emptyTitle: req.emptyTitle,
+      withoutManagement: req.withoutManagement,
     );
     final grouped = groupByTitle(out, {
       for (final r in out.results)
@@ -1079,6 +1124,7 @@ class PayrollService {
       agent: added.where((r) => isAgentType(r.type)).length,
       management: added.where((r) => r.type == typeManagement).length,
       notFound: added.where((r) => r.type == typeNotFound).length,
+      noSalary: added.where((r) => r.type == typeNoSalary).length,
     );
     final last = firstNew + missing.length - 1;
     return PreparedAudit.plan(
@@ -1555,6 +1601,9 @@ class PayrollService {
       } else if (r.type == typeNotFound) {
         byRowSalary[r.rowIndex] = 0;
         byRowStatus[r.rowIndex] = typeNotFound;
+      } else if (r.type == typeNoSalary) {
+        byRowSalary[r.rowIndex] = 0;
+        byRowStatus[r.rowIndex] = statusNoSalary;
       }
     }
     // Repeated rows of a duplicated id: no salary (it belongs to the first
@@ -1599,7 +1648,9 @@ class PayrollService {
       } else if (r.type == typeManagement && r.mgmtSheetRowIndex != null) {
         mgmt[r.mgmtSheetRowIndex!] = out.mgmtColorVal;
       }
-      if (isAgentType(r.type)) {
+      // «بدون راتب» (3.4.0) was found in the agent sheet: its rows are
+      // audited and coloured like the agent's.
+      if (isAgentType(r.type) || r.type == typeNoSalary) {
         for (final idx in r.agentSheetRowIndices) {
           agent[idx] = out.agentColorVal;
         }
@@ -1622,20 +1673,19 @@ class PayrollService {
     for (final r in out.results) {
       if (fromRow != null && r.rowIndex < fromRow) continue;
       if (onlyIds != null && !onlyIds.contains(r.userId)) continue;
-      if (isAgentType(r.type) && r.userId.isNotEmpty) {
+      // «بدون راتب» (3.4.0) was found in the agent sheet: audited there.
+      final agentLike = isAgentType(r.type) || r.type == typeNoSalary;
+      if (agentLike && r.userId.isNotEmpty) {
         auditedAgent.add(r.userId);
       }
       if (r.type == typeManagement && r.userId.isNotEmpty) {
         auditedMgmt.add(r.userId);
       }
-      if (r.userId.isNotEmpty &&
-          (isAgentType(r.type) || r.type == typeManagement)) {
+      if (r.userId.isNotEmpty && (agentLike || r.type == typeManagement)) {
         entries.add({
           'id': r.userId,
           'source':
-              isAgentType(r.type)
-                  ? 'تدقيق وكيل من النظام'
-                  : 'تدقيق ادارة من النظام',
+              agentLike ? 'تدقيق وكيل من النظام' : 'تدقيق ادارة من النظام',
           'details': {
             'type': r.type,
             'title': r.title,
@@ -1661,7 +1711,7 @@ class PayrollService {
     required List<DuplicateGroup> duplicates,
   }) {
     final summary = out.summary;
-    final appliedCount = summary.agent + summary.management;
+    final appliedCount = summary.agent + summary.management + summary.noSalary;
     var message =
         localOnly ? 'تم تنفيذ التدقيق على الهاتف' : 'تم تنفيذ التدقيق';
     if (summary.total == 0) {
@@ -1669,7 +1719,10 @@ class PayrollService {
           'لم تُقرأ أي صفوف من جدول بيانات المستخدمين. تحقق من أن الورقة تحتوي بيانات وأن عمود رقم المستخدم وعمود اسم الورقة مملوءان.';
     } else if (appliedCount == 0) {
       message =
-          'لم يُطابق أي صف (0 سحب وكالة، 0 سحب إدارة). يُقارن رقم المستخدم من عمود بيانات المستخدمين مع عمودي الإدارة والوكيل. تحقق من تطابق الأرقام أو من اختيار الأعمدة الصحيحة (انظر العينة أدناه).';
+          out.mgmtDataRows.isEmpty
+              // Audit without the management sheet (3.4.0).
+              ? 'لم يُطابق أي صف (0 سحب وكالة، 0 بدون راتب). يُقارن رقم المستخدم من عمود بيانات المستخدمين مع عمود الوكيل. تحقق من تطابق الأرقام أو من اختيار الأعمدة الصحيحة (انظر العينة أدناه).'
+              : 'لم يُطابق أي صف (0 سحب وكالة، 0 سحب إدارة). يُقارن رقم المستخدم من عمود بيانات المستخدمين مع عمودي الإدارة والوكيل. تحقق من تطابق الأرقام أو من اختيار الأعمدة الصحيحة (انظر العينة أدناه).';
     }
 
     final sampleUserIds = <String>[];

@@ -566,4 +566,98 @@ void main() {
     expect(cache.auditedAgentIds, {'1001'});
     await upgraded.close();
   });
+
+  // ---- 3.4.0: audit without the management sheet (owner's request) ----
+
+  group('without management', () {
+    PayrollRequest noMgmt(int id, {bool force = false}) => PayrollRequest(
+      cycleId: id,
+      userInfo: const GoogleUserInfo('ui', null),
+      discountRate: 10,
+      agentColor: '#8b5cf6',
+      managementColor: '#facc15',
+      columns: const AuditColumns(),
+      forceReaudit: force,
+      withoutManagement: true,
+    );
+
+    test('uses the user-info and agent sheets only', () async {
+      // 1003 is in the agent sheet with a salary of 0; 1009 is not there.
+      fake.books['cyc']!['الوكيل']!.add(['1003', 'علي', '', '0']);
+      final id = await linkedCycle();
+      final booksBefore = {
+        for (final e in fake.books['cyc']!.entries) e.key: e.value.length,
+      };
+      final r = await payroll.execute(noMgmt(id));
+      expect(r.success, isTrue, reason: r.message);
+      expect(r.summary!.agent, 2);
+      expect(r.summary!.management, 0);
+      expect(r.summary!.noSalary, 1);
+      expect(r.summary!.notFound, 1);
+
+      final ui = fake.books['ui']!['Sheet1']!;
+      expect([for (final row in ui.skip(1)) row[11]], ['90', '90', '0', '0']);
+      expect(
+        [for (final row in ui.skip(1)) row[12]],
+        ['سحب وكيل', 'سحب وكيل راتبين', 'بدون راتب', 'غير موجود'],
+      );
+      // Nothing copied, no agency sheet added, the management sheet not
+      // read or coloured; the agent rows of the found users coloured.
+      expect({
+        for (final e in fake.books['cyc']!.entries) e.key: e.value.length,
+      }, booksBefore);
+      expect(fake.log.where((l) => l.contains('الإدارة')), isEmpty);
+      expect(fake.colors['cyc|${fake.ids['cyc']!['الإدارة']}'], isNull);
+      expect(fake.colors['cyc|${fake.ids['cyc']!['الوكيل']}'], {
+        1: '#8b5cf6',
+        2: '#8b5cf6',
+        3: '#8b5cf6',
+        5: '#8b5cf6',
+      });
+    });
+
+    test('a period with the agent sheet only', () async {
+      final id = await db.insertCycle(
+        name: 'وكيل فقط',
+        managementRows: const [],
+        agentRows: const [],
+        agentSpreadsheetId: 'cyc',
+        agentSheetName: 'الوكيل',
+      );
+      final cycle = await db.getCycleInfo(id);
+      expect(cycle!.linkedToGoogle, isTrue);
+      final r = await payroll.execute(noMgmt(id));
+      expect(r.success, isTrue, reason: r.message);
+      expect(r.summary!.agent, 2);
+      expect(r.summary!.notFound, 2);
+      // The current method needs the management sheet and says so.
+      final erp = await payroll.execute(request(id, force: true));
+      expect(erp.success, isFalse);
+      expect(erp.message, PayrollService.noManagementMessage);
+    });
+
+    test('the next audit is incremental; «بدون راتب» users are kept', () async {
+      fake.books['cyc']!['الوكيل']!.add(['1003', 'علي', '', '0']);
+      final id = await linkedCycle();
+      await payroll.execute(noMgmt(id));
+      final ui = fake.books['ui']!['Sheet1']!;
+      ui.add(['منى', '0996', '1004', 'وكيل الجنوب']);
+      fake.books['cyc']!['الوكيل']!.add(['1004', 'منى', '', '50']);
+      final r = await payroll.execute(noMgmt(id));
+      expect(r.success, isTrue, reason: r.message);
+      expect(r.message, contains('1 سحب وكالة'));
+      expect(ui.last[11], '45');
+      expect(ui.last[12], 'سحب وكيل');
+      expect(ui[3][12], 'بدون راتب');
+    });
+
+    test('the request keeps the method in a background job', () {
+      final j = noMgmt(1).toJson();
+      expect(PayrollRequest.fromJson(j).withoutManagement, isTrue);
+      expect(
+        PayrollRequest.fromJson(request(1).toJson()).withoutManagement,
+        isFalse,
+      );
+    });
+  });
 }

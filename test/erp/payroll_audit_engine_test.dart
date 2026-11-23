@@ -133,4 +133,71 @@ void main() {
       expect(computeSalaryWithDiscount(['100', '50.5'], 10).after, 135.45);
     });
   });
+
+  group('withoutManagement (3.4.0)', () {
+    final mgmtRows = [
+      ['id'],
+      ['1'],
+      ['2'],
+      ['3'],
+    ];
+    final agentRows = [
+      ['id', '', '', 'salary'],
+      ['1', '', '', '100'],
+      ['2', '', '', '0'],
+      ['2', '', '', ''],
+      ['5', '', '', '40'],
+    ];
+    final userInfo = [
+      ['', '', 'id', 'title'],
+      ['', '', '1', 'A'],
+      ['', '', '2', 'A'],
+      ['', '', '3', 'B'],
+      ['', '', '', 'B'],
+      ['', '', '5', ''],
+    ];
+
+    test('salary in the agent sheet, 0 there, or not there', () {
+      final out = runPayrollAuditCore(
+        managementRows: mgmtRows,
+        agentRows: agentRows,
+        userInfoRows: userInfo,
+        discountRatePct: 10,
+        withoutManagement: true,
+      );
+      expect(
+        [for (final r in out.results) r.type],
+        [typeAgent, typeNoSalary, typeNotFound, typeNotFound, typeAgent],
+      );
+      expect(
+        [for (final r in out.results) r.salaryValue],
+        [90, 0, null, null, 36],
+      );
+      expect(out.results[1].statusLabel, 'بدون راتب');
+      expect(out.byTitle, isEmpty);
+      expect(out.mgmtByUserId, isEmpty);
+      expect(out.summary.noSalary, 1);
+      expect(out.summary.management, 0);
+    });
+
+    test('off, the same sheets give the ERP result', () {
+      final out = runPayrollAuditCore(
+        managementRows: mgmtRows,
+        agentRows: agentRows,
+        userInfoRows: userInfo,
+        discountRatePct: 10,
+      );
+      expect(
+        [for (final r in out.results) r.type],
+        [typeAgent, typeAgentTwo, typeManagement, typeNotFound, typeNotFound],
+      );
+      expect(out.summary.noSalary, 0);
+      expect(out.summary.toJson().keys.take(4), [
+        'total',
+        'agent',
+        'management',
+        'notFound',
+      ]);
+    });
+  });
 }

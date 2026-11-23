@@ -78,13 +78,17 @@ class CycleSyncWorker {
   /// ERP `syncSingleCycle`.
   Future<void> syncSingleCycle(Cycle cycle) async {
     final sheets = sheetsProvider();
-    final mgmtSsId = cycle.managementSpreadsheetId!;
+    final mgmtSsId = cycle.managementSpreadsheetId;
     final agentSsId = cycle.agentSpreadsheetId!;
-    final mgmt = await fetchSheetWithFallback(
-      sheets,
-      mgmtSsId,
-      cycle.managementSheetName,
-    );
+    // A period without a management sheet (3.4.0) syncs its agent sheet only.
+    final mgmt =
+        mgmtSsId == null
+            ? const SheetFetchResult(<List<String>>[], null)
+            : await fetchSheetWithFallback(
+              sheets,
+              mgmtSsId,
+              cycle.managementSheetName,
+            );
     final agent = await fetchSheetWithFallback(
       sheets,
       agentSsId,
@@ -120,13 +124,16 @@ class CycleSyncWorker {
       return ids;
     }
 
-    final auditedMgmtIds = await coloredIds(
-      mgmtSsId,
-      mgmt.sheetTitleUsed,
-      mgmt.values,
-      mgmtIdx,
-      columnIndexToLetter(mgmtIdx),
-    );
+    final auditedMgmtIds =
+        mgmtSsId == null
+            ? <String>{}
+            : await coloredIds(
+              mgmtSsId,
+              mgmt.sheetTitleUsed,
+              mgmt.values,
+              mgmtIdx,
+              columnIndexToLetter(mgmtIdx),
+            );
     final auditedAgentIds = await coloredIds(
       agentSsId,
       agent.sheetTitleUsed,

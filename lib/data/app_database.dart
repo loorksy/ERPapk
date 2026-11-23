@@ -72,8 +72,9 @@ class Cycle {
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  bool get linkedToGoogle =>
-      managementSpreadsheetId != null && agentSpreadsheetId != null;
+  /// A Google period: its agent sheet is in Google. The management sheet is
+  /// optional since 3.4.0 (audit without the management sheet).
+  bool get linkedToGoogle => agentSpreadsheetId != null;
 
   static Cycle fromRow(
     Map<String, Object?> r, {
@@ -684,7 +685,7 @@ class AppDatabase {
       AuditJob._json(await getBlob(_jobKey(id, 'result')));
 
   /// Read only: the outcome counts of a job's saved result (total, agent,
-  /// management, notFound) for the periods list, taken from the first part
+  /// management, notFound, noSalary) for the periods list, taken from the first part
   /// of the saved JSON so the per-user rows are not loaded.
   Future<List<int>?> getAuditJobSummaryCounts(int id) async {
     final rows = await _db.query(
@@ -695,10 +696,11 @@ class AppDatabase {
     );
     if (rows.isEmpty) return null;
     final m = RegExp(
-      r'"summary":\{"total":(\d+),"agent":(\d+),"management":(\d+),"notFound":(\d+)\}',
+      r'"summary":\{"total":(\d+),"agent":(\d+),"management":(\d+),"notFound":(\d+)(?:,"noSalary":(\d+))?\}',
     ).firstMatch(rows.first['data'] as String);
     if (m == null) return null;
-    return [for (var g = 1; g <= 4; g++) int.parse(m.group(g)!)];
+    // «بدون راتب» (3.4.0) is 0 in results saved before it existed.
+    return [for (var g = 1; g <= 5; g++) int.parse(m.group(g) ?? '0')];
   }
 
   // ---------------------------------------------------------------- cycles

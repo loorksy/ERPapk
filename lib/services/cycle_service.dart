@@ -45,17 +45,19 @@ class CycleService {
     return r.values;
   }
 
-  /// ERP `POST /import-google`.
+  /// ERP `POST /import-google`. The management sheet is optional since
+  /// 3.4.0 (audit without the management sheet): no id = no rows.
   Future<(Rows, Rows)> importFromGoogle({
-    required String managementSpreadsheetId,
+    required String? managementSpreadsheetId,
     String? managementSheetName,
     required String agentSpreadsheetId,
     String? agentSheetName,
   }) async {
-    final m = await readSheetFromGoogle(
-      managementSpreadsheetId.trim(),
-      managementSheetName,
-    );
+    final mId = managementSpreadsheetId?.trim() ?? '';
+    final m =
+        mId.isEmpty
+            ? const <List<String>>[]
+            : await readSheetFromGoogle(mId, managementSheetName);
     final a = await readSheetFromGoogle(
       agentSpreadsheetId.trim(),
       agentSheetName,
@@ -79,8 +81,11 @@ class CycleService {
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
     final aSs = _clean(agentSpreadsheetId);
-    if (mSs != null && aSs != null && (mRows == null || aRows == null)) {
-      mRows = await readSheetFromGoogle(mSs, managementSheetName);
+    if (aSs != null && (aRows == null || (mSs != null && mRows == null))) {
+      mRows =
+          mSs == null
+              ? const <List<String>>[]
+              : await readSheetFromGoogle(mSs, managementSheetName);
       aRows = await readSheetFromGoogle(aSs, agentSheetName);
     }
     final tdp = (transferDiscountPct ?? 0).clamp(0, 100).toDouble();
@@ -114,8 +119,11 @@ class CycleService {
     var aRows = agentRows;
     final mSs = _clean(managementSpreadsheetId);
     final aSs = _clean(agentSpreadsheetId);
-    if (mSs != null && aSs != null && (mRows == null || aRows == null)) {
-      mRows = await readSheetFromGoogle(mSs, managementSheetName);
+    if (aSs != null && (aRows == null || (mSs != null && mRows == null))) {
+      mRows =
+          mSs == null
+              ? const <List<String>>[]
+              : await readSheetFromGoogle(mSs, managementSheetName);
       aRows = await readSheetFromGoogle(aSs, agentSheetName);
     }
     await db.updateCycle(id, {
@@ -158,18 +166,22 @@ class CycleService {
     if (cycle == null) return const SyncOutcome(false, 'الفترة غير موجودة');
     final mgmtSsId = cycle.managementSpreadsheetId;
     final agentSsId = cycle.agentSpreadsheetId;
-    if (mgmtSsId == null || agentSsId == null) {
+    if (agentSsId == null) {
       return const SyncOutcome(
         false,
         'هذه الفترة غير مرتبطة بجداول Google. أنشئ فترة جديدة من شاشة الفترات مصدرها Google Sheets ثم احفظها لتفعيل المزامنة.',
       );
     }
     final sheets = sheetsProvider();
-    final mgmt = await fetchSheetWithFallback(
-      sheets,
-      mgmtSsId,
-      cycle.managementSheetName,
-    );
+    // The management sheet is optional since 3.4.0.
+    final mgmt =
+        mgmtSsId == null
+            ? const SheetFetchResult(<List<String>>[], null)
+            : await fetchSheetWithFallback(
+              sheets,
+              mgmtSsId,
+              cycle.managementSheetName,
+            );
     final agent = await fetchSheetWithFallback(
       sheets,
       agentSsId,

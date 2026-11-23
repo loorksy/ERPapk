@@ -17,6 +17,13 @@ const String statusAgent = 'سحب وكيل';
 const String statusAgentTwo = 'سحب وكيل راتبين';
 const String statusManagement = 'سحب ادارة';
 
+/// Audit without the management sheet (owner's request 2026-11-23, 3.4.0):
+/// a user found in the agent sheet whose salary there is 0 (or empty).
+/// Takes the place of «سحب إدارة», which needs the management sheet;
+/// written as the status with a salary of 0.
+const String typeNoSalary = 'بدون راتب';
+const String statusNoSalary = 'بدون راتب';
+
 const String defaultAgentColor = '#8b5cf6';
 const String defaultManagementColor = '#facc15';
 
@@ -144,17 +151,22 @@ class AuditSummary {
     required this.agent,
     required this.management,
     required this.notFound,
+    this.noSalary = 0,
   });
   final int total;
   final int agent;
   final int management;
   final int notFound;
 
+  /// «بدون راتب» (audit without the management sheet).
+  final int noSalary;
+
   Map<String, Object?> toJson() => {
     'total': total,
     'agent': agent,
     'management': management,
     'notFound': notFound,
+    'noSalary': noSalary,
   };
 
   static AuditSummary fromJson(Map<String, Object?> j) => AuditSummary(
@@ -162,6 +174,7 @@ class AuditSummary {
     agent: (j['agent'] as num?)?.toInt() ?? 0,
     management: (j['management'] as num?)?.toInt() ?? 0,
     notFound: (j['notFound'] as num?)?.toInt() ?? 0,
+    noSalary: (j['noSalary'] as num?)?.toInt() ?? 0,
   );
 }
 
@@ -212,6 +225,14 @@ class AuditCoreOutput {
 /// [emptyTitle] (owner's request, 2026-11-17): a user whose title column
 /// (agency name, D) is empty goes to the sheet of that name («غير مذكور»)
 /// instead of ERP's one-sheet-per-row «صف_N». Null keeps ERP's behaviour.
+///
+/// [withoutManagement] (owner's request 2026-11-23, 3.4.0; off = ERP): the
+/// audit uses the user-info and agent sheets only. A user whose agent rows
+/// add up to a salary is «سحب وكالة» as in ERP; one found in the agent
+/// sheet with a salary of 0 (or empty) is «بدون راتب» (salary 0); one not
+/// in the agent sheet, or a row without a user id, is «غير موجود». The
+/// management sheet is not read, so nothing goes to the agency sheets
+/// ([byTitle] is empty) and only agent rows are coloured.
 AuditCoreOutput runPayrollAuditCore({
   required SheetRows managementRows,
   required SheetRows agentRows,
@@ -221,7 +242,9 @@ AuditCoreOutput runPayrollAuditCore({
   String? agentColor,
   String? managementColor,
   String? emptyTitle,
+  bool withoutManagement = false,
 }) {
+  if (withoutManagement) managementRows = const [];
   final colC = columnLetterToIndex(columns.userInfoUserIdCol) ?? 2;
   final colD = columnLetterToIndex(columns.userInfoTitleCol) ?? 3;
   final cycleMgmtCol = columnLetterToIndex(columns.cycleMgmtUserIdCol) ?? 0;
@@ -311,7 +334,25 @@ AuditCoreOutput runPayrollAuditCore({
     var type = typeNotFound;
     double? salaryValue;
     var statusLabel = '';
-    if (inAgent && inMgmt) {
+    if (withoutManagement) {
+      if (inAgent) {
+        var sumRaw = 0.0;
+        for (final m in agentMatches) {
+          final v = cellAt(m.row, cycleAgentSalaryColIdx);
+          final n = jsParseFloat(normalizeForNumber(v ?? ''));
+          sumRaw += jsIsFiniteNumber(n) ? n : 0;
+        }
+        if (sumRaw != 0) {
+          type = agentMatches.length > 1 ? typeAgentTwo : typeAgent;
+          salaryValue = jsRound(sumRaw * discountMultiplier * 100) / 100;
+          statusLabel = agentMatches.length > 1 ? statusAgentTwo : statusAgent;
+        } else {
+          type = typeNoSalary;
+          salaryValue = 0;
+          statusLabel = statusNoSalary;
+        }
+      }
+    } else if (inAgent && inMgmt) {
       type = agentMatches.length > 1 ? typeAgentTwo : typeAgent;
       var sumRaw = 0.0;
       for (final m in agentMatches) {
@@ -356,6 +397,7 @@ AuditCoreOutput runPayrollAuditCore({
     agent: results.where((r) => isAgentType(r.type)).length,
     management: results.where((r) => r.type == typeManagement).length,
     notFound: results.where((r) => r.type == typeNotFound).length,
+    noSalary: results.where((r) => r.type == typeNoSalary).length,
   );
 
   return AuditCoreOutput(

@@ -70,6 +70,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
     String? agentNameCol,
     String? mgmtShareCol,
     String? unmentionedColor,
+    bool? auditWithoutMgmt,
   }) {
     final c = _c!;
     return WorkspaceColumns(
@@ -86,6 +87,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
       unmentionedIdCols: c.unmentionedIdCols,
       unmentionedLabelCols: c.unmentionedLabelCols,
       unmentionedColor: unmentionedColor ?? c.unmentionedColor,
+      auditWithoutMgmt: auditWithoutMgmt ?? c.auditWithoutMgmt,
     );
   }
 
@@ -109,6 +111,7 @@ class _ColumnsPageState extends State<ColumnsPage> {
       unmentionedIdCols: idCols,
       unmentionedLabelCols: labelCols,
       unmentionedColor: c.unmentionedColor,
+      auditWithoutMgmt: c.auditWithoutMgmt,
     );
     final problem = next.validate();
     if (problem != null) {
@@ -277,6 +280,27 @@ class _ColumnsPageState extends State<ColumnsPage> {
                             style: TextStyle(fontSize: 14.5, color: Tw.ink2),
                           ),
                         ],
+                      ),
+                    ),
+                    // 3.4.0: the audit method, the ERP one by default.
+                    _section(
+                      'طريقة التدقيق',
+                      SegmentedChoice(
+                        options: const ['مع الإدارة', 'بدون الإدارة'],
+                        selected: c.auditWithoutMgmt ? 1 : 0,
+                        onChanged:
+                            (i) => setState(
+                              () => _c = _with(auditWithoutMgmt: i == 1),
+                            ),
+                      ),
+                      after: Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          c.auditWithoutMgmt
+                              ? 'التدقيق بجدولي بيانات المستخدمين والوكيل فقط: من له راتب في الوكيل «سحب وكالة»، ومن رقمه في الوكيل وراتبه 0 «بدون راتب»، ومن ليس في الوكيل «غير موجود». لا يُقرأ جدول الإدارة ولا يُنسخ شيء إلى أوراق الوكالات.'
+                              : 'التدقيق كما في النظام: بجداول بيانات المستخدمين والإدارة والوكيل، مع النسخ إلى أوراق الوكالات.',
+                          style: TextStyle(fontSize: 13.5, color: Tw.ink2),
+                        ),
                       ),
                     ),
                     _section(
